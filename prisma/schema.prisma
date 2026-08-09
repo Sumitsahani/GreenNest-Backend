@@ -1,0 +1,288 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum OrderStatus {
+  PLACED
+  CONFIRMED
+  PACKED
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+}
+
+enum CareType {
+  WATER
+  FERTILIZE
+  PRUNE
+  REPOT
+  NOTE
+}
+
+enum BookingStatus {
+  CONFIRMED
+  GARDENER_ASSIGNED
+  ON_THE_WAY
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model Category {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String    @unique
+  slug      String    @unique
+  sortOrder Int       @default(0)
+  active    Boolean   @default(true)
+  products  Product[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model Product {
+  id             String         @id @default(uuid()) @db.Uuid
+  slug           String         @unique
+  name           String
+  scientificName String?
+  description    String
+  price          Decimal        @db.Decimal(10, 2)
+  salePrice      Decimal?       @db.Decimal(10, 2)
+  images         String[]
+  rating         Decimal        @default(0) @db.Decimal(2, 1)
+  reviewCount    Int            @default(0)
+  stock          Int            @default(0)
+  petSafe        Boolean        @default(false)
+  height         String?
+  light          String?
+  water          String?
+  difficulty     String?
+  featured       Boolean        @default(false)
+  active         Boolean        @default(true)
+  categoryId     String         @db.Uuid
+  category       Category       @relation(fields: [categoryId], references: [id])
+  wishlistItems  WishlistItem[]
+  cartItems      CartItem[]
+  orderItems     OrderItem[]
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([categoryId, active])
+  @@index([active, featured])
+  @@index([price])
+}
+
+model CartItem {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  productId String   @db.Uuid
+  quantity  Int
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, productId])
+  @@index([userId, updatedAt])
+}
+
+model Address {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @db.Uuid
+  label       String
+  fullAddress String
+  postalCode  String
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId, createdAt])
+}
+
+model Order {
+  id              String      @id @default(uuid()) @db.Uuid
+  orderNumber     String      @unique
+  userId          String      @db.Uuid
+  status          OrderStatus @default(PLACED)
+  addressLabel    String
+  deliveryAddress String
+  postalCode      String
+  subtotal        Decimal     @db.Decimal(10, 2)
+  deliveryFee     Decimal     @db.Decimal(10, 2)
+  total           Decimal     @db.Decimal(10, 2)
+  paymentMethod   String
+  items           OrderItem[]
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([status])
+}
+
+model OrderItem {
+  id          String  @id @default(uuid()) @db.Uuid
+  orderId     String  @db.Uuid
+  productId   String  @db.Uuid
+  productName String
+  image       String?
+  unitPrice   Decimal @db.Decimal(10, 2)
+  quantity    Int
+  lineTotal   Decimal @db.Decimal(10, 2)
+  order       Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product     Product @relation(fields: [productId], references: [id])
+
+  @@index([orderId])
+}
+
+model GardenPlant {
+  id             String         @id @default(uuid()) @db.Uuid
+  userId         String         @db.Uuid
+  name           String
+  species        String?
+  location       String
+  notes          String?
+  imageUrl       String?
+  health         Int            @default(100)
+  wateringDays   Int            @default(7)
+  nextWateringAt DateTime
+  careEvents     CareEvent[]
+  reminders      CareReminder[]
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([userId, nextWateringAt])
+}
+
+model CareEvent {
+  id      String      @id @default(uuid()) @db.Uuid
+  plantId String      @db.Uuid
+  type    CareType
+  note    String?
+  caredAt DateTime    @default(now())
+  plant   GardenPlant @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  @@index([plantId, caredAt])
+}
+
+model CareReminder {
+  id          String      @id @default(uuid()) @db.Uuid
+  plantId     String      @db.Uuid
+  type        CareType
+  scheduledAt DateTime
+  enabled     Boolean     @default(true)
+  plant       GardenPlant @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([plantId, scheduledAt])
+  @@index([enabled, scheduledAt])
+}
+
+model GardeningService {
+  id              String           @id @default(uuid()) @db.Uuid
+  slug            String           @unique
+  title           String
+  category        String
+  description     String
+  durationMinutes Int
+  price           Decimal          @db.Decimal(10, 2)
+  icon            String
+  inclusions      String[]
+  active          Boolean          @default(true)
+  bookings        ServiceBooking[]
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+}
+
+model Gardener {
+  id             String           @id @default(uuid()) @db.Uuid
+  name           String
+  identityNumber String           @unique
+  phoneMasked    String
+  rating         Decimal          @default(5) @db.Decimal(2, 1)
+  jobsCompleted  Int              @default(0)
+  verified       Boolean          @default(true)
+  active         Boolean          @default(true)
+  bookings       ServiceBooking[]
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+}
+
+model ServiceBooking {
+  id            String           @id @default(uuid()) @db.Uuid
+  bookingNumber String           @unique
+  userId        String           @db.Uuid
+  serviceId     String           @db.Uuid
+  gardenerId    String?          @db.Uuid
+  addressId     String           @db.Uuid
+  scheduledAt   DateTime
+  status        BookingStatus    @default(CONFIRMED)
+  notes         String?
+  photoUrls     String[]         @default([])
+  price         Decimal          @db.Decimal(10, 2)
+  service       GardeningService @relation(fields: [serviceId], references: [id])
+  gardener      Gardener?        @relation(fields: [gardenerId], references: [id])
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([gardenerId, scheduledAt])
+  @@index([scheduledAt, status])
+}
+
+model WishlistItem {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  productId String   @db.Uuid
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, productId])
+  @@index([userId, createdAt])
+}
+
+model UserSettings {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String   @unique @db.Uuid
+  orderUpdates     Boolean  @default(true)
+  gardenerUpdates  Boolean  @default(true)
+  careReminders    Boolean  @default(true)
+  offers            Boolean  @default(false)
+  pushEnabled       Boolean  @default(true)
+  emailEnabled      Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model Banner {
+  id String @id @default(uuid()) @db.Uuid
+  slug String @unique
+  placement String
+  eyebrow String?
+  title String
+  imageUrl String
+  route String?
+  active Boolean @default(true)
+  sortOrder Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([placement, active, sortOrder])
+}
+
+model Notification {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  title     String
+  message   String
+  type      String
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+}

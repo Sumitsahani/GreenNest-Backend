@@ -1,0 +1,1 @@
+{"success":false,"error":{"code":"SLOT_NOT_AVAILABLE","message":"This time slot is no longer available","field":"timeSlot","details":{"date":"2026-08-12"},"requestId":"req_123"}}

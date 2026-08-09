@@ -1,0 +1,2 @@
+ALTER TABLE "ServiceBooking"
+ADD COLUMN "photoUrls" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];

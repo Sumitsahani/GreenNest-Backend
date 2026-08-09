@@ -1,0 +1,49 @@
+import { ApiProperty } from '@nestjs/swagger';
+import { IsIn, IsNotEmpty, IsOptional, IsString, IsUrl, Length, Matches, MinLength } from 'class-validator';
+
+export class RequestOtpDto {
+  @ApiProperty({ example: '9876543210' })
+  @Matches(/^\d{10}$/, { message: 'Phone must contain exactly 10 digits' })
+  phone!: string;
+}
+
+export class VerifyOtpDto extends RequestOtpDto {
+  @ApiProperty({ example: '123456' })
+  @Matches(/^\d{6}$/, { message: 'OTP must contain exactly 6 digits' })
+  code!: string;
+}
+
+export class RefreshTokenDto {
+  @ApiProperty()
+  @IsString()
+  @MinLength(20)
+  refreshToken!: string;
+}
+
+export class UpdateProfileDto {
+  @ApiProperty({ example: 'Sumit Kumar' })
+  @IsString()
+  @Length(2, 80)
+  name!: string;
+
+  @ApiProperty({ example: 'Bengaluru, India' })
+  @IsString()
+  @Length(2, 120)
+  location!: string;
+
+  @ApiProperty({ enum: ['Beginner', 'Intermediate', 'Experienced'] })
+  @IsIn(['Beginner', 'Intermediate', 'Experienced'])
+  experience!: 'Beginner' | 'Intermediate' | 'Experienced';
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsUrl()
+  avatarUrl?: string;
+}
+
+export class LogoutDto {
+  @ApiProperty({ required: false, example: 'global' })
+  @IsString()
+  @IsNotEmpty()
+  scope = 'global';
+}

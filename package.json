@@ -1,0 +1,67 @@
+{
+  "name": "@greennest/api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GreenNest REST API contract foundation",
+  "license": "UNLICENSED",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/src/main.js",
+    "start:dev": "node --watch -r ts-node/register src/main.ts",
+    "lint": "eslint \"{src,test,scripts,packages}/**/*.ts\"",
+    "format": "prettier --write \"{src,test,scripts,packages}/**/*.{ts,json}\" \"*.{json,ts,md}\"",
+    "test": "jest --runInBand",
+    "test:watch": "jest --watch",
+    "test:contract": "jest --runInBand test/contract",
+    "prisma:generate": "prisma generate",
+    "prisma:validate": "prisma validate",
+    "prisma:migrate:dev": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "prisma:seed": "ts-node --project tsconfig.json prisma/seed.ts",
+    "openapi:generate": "ts-node --project tsconfig.json scripts/generate-openapi.ts",
+    "types:generate": "openapi-typescript openapi/openapi.json -o packages/shared-types/src/generated/api.ts",
+    "contract:generate": "npm run openapi:generate && npm run types:generate"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.1.0",
+    "@nestjs/config": "^4.0.0",
+    "@nestjs/core": "^11.1.0",
+    "@nestjs/platform-express": "^11.1.0",
+    "@nestjs/swagger": "^11.2.0",
+    "@nestjs/throttler": "^6.4.0",
+    "@prisma/client": "^6.19.3",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.2",
+    "helmet": "^8.1.0",
+    "joi": "^17.13.3",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@nestjs/testing": "^11.1.0",
+    "@types/express": "^5.0.0",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^22.0.0",
+    "@types/supertest": "^6.0.0",
+    "eslint": "^9.39.0",
+    "jest": "^30.0.0",
+    "openapi-typescript": "^7.10.0",
+    "prettier": "^3.6.0",
+    "prisma": "^6.19.3",
+    "supertest": "^7.1.0",
+    "ts-jest": "^29.4.0",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.46.0"
+  },
+  "overrides": {
+    "@nestjs/swagger": {
+      "js-yaml": "5.2.3"
+    },
+    "@redocly/openapi-core": {
+      "js-yaml": "4.3.1"
+    }
+  }
+}
