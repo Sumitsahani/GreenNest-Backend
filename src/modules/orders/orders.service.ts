@@ -97,6 +97,17 @@ export class OrdersService {
         },
         include: { items: true },
       });
+      const earnedPoints = Math.floor(subtotal / 10);
+      if (earnedPoints > 0)
+        await tx.rewardTransaction.create({
+          data: {
+            userId,
+            points: earnedPoints,
+            type: 'ORDER_EARN',
+            title: `Order ${order.orderNumber}`,
+            referenceId: order.id,
+          },
+        });
       for (const item of cart)
         await tx.product.update({
           where: { id: item.productId },
