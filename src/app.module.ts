@@ -16,6 +16,7 @@ import { OrdersModule } from './modules/orders/orders.module';
 import { GardenModule } from './modules/garden/garden.module';
 import { ServicesModule } from './modules/services/services.module';
 import { AccountModule } from './modules/account/account.module';
+import { RewardsModule } from './modules/rewards/rewards.module';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { AccountModule } from './modules/account/account.module';
     GardenModule,
     ServicesModule,
     AccountModule,
+    RewardsModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

@@ -123,6 +123,32 @@ model Order {
   @@index([status])
 }
 
+model RewardTransaction {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @db.Uuid
+  points      Int
+  type        String
+  title       String
+  referenceId String?  @db.Uuid
+  createdAt   DateTime @default(now())
+
+  @@unique([type, referenceId])
+  @@index([userId, createdAt])
+}
+
+model RewardRedemption {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @db.Uuid
+  rewardId   String
+  title      String
+  pointsCost Int
+  code       String   @unique
+  status     String   @default("ACTIVE")
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
 model OrderItem {
   id          String  @id @default(uuid()) @db.Uuid
   orderId     String  @db.Uuid
