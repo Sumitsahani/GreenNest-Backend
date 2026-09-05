@@ -4,8 +4,10 @@ import { ErrorCode } from '../../common/constants/error-code';
 import { BusinessException } from '../../common/exceptions/business.exception';
 import type { RefreshTokenDto, UpdateProfileDto } from './dto/auth.dto';
 import type {
+  AuthRegistrationResponse,
   AuthSessionResponse,
   AuthUserResponse,
+  SupabaseEmailSignUpResponse,
   SupabaseSession,
   SupabaseUser,
 } from './auth.types';
@@ -18,6 +20,36 @@ export class AuthService {
   constructor(config: ConfigService) {
     this.url = config.getOrThrow<string>('SUPABASE_URL');
     this.apiKey = config.getOrThrow<string>('SUPABASE_PUBLISHABLE_KEY');
+  }
+
+  async registerWithEmail(email: string, password: string): Promise<AuthRegistrationResponse> {
+    const response = await this.supabaseRequest<SupabaseEmailSignUpResponse>(
+      '/auth/v1/signup',
+      {
+        method: 'POST',
+        body: JSON.stringify({ email: this.normalizeEmail(email), password }),
+      },
+      ErrorCode.EMAIL_SIGN_UP_FAILED,
+    );
+    const user = this.getSignUpUser(response);
+    const session = this.mapOptionalSession(response, user);
+    return {
+      confirmationRequired: session === null,
+      user: this.mapUser(user),
+      session,
+    };
+  }
+
+  async loginWithEmail(email: string, password: string): Promise<AuthSessionResponse> {
+    const session = await this.supabaseRequest<SupabaseSession>(
+      '/auth/v1/token?grant_type=password',
+      {
+        method: 'POST',
+        body: JSON.stringify({ email: this.normalizeEmail(email), password }),
+      },
+      ErrorCode.EMAIL_SIGN_IN_FAILED,
+    );
+    return this.mapSession(session);
   }
 
   async requestOtp(
@@ -100,12 +132,22 @@ export class AuthService {
       );
     }
     if (!response.ok) {
+      const unauthorized =
+        code === ErrorCode.UNAUTHORIZED || code === ErrorCode.EMAIL_SIGN_IN_FAILED;
       throw new BusinessException(
         code,
         code === ErrorCode.OTP_INVALID
           ? 'The verification code is invalid or expired'
-          : 'Authentication request could not be completed',
-        code === ErrorCode.AUTH_PROVIDER_ERROR ? HttpStatus.BAD_GATEWAY : HttpStatus.BAD_REQUEST,
+          : code === ErrorCode.EMAIL_SIGN_IN_FAILED
+            ? 'Invalid email or password'
+            : code === ErrorCode.EMAIL_SIGN_UP_FAILED
+              ? 'Account could not be created'
+              : 'Authentication request could not be completed',
+        code === ErrorCode.AUTH_PROVIDER_ERROR
+          ? HttpStatus.BAD_GATEWAY
+          : unauthorized
+            ? HttpStatus.UNAUTHORIZED
+            : HttpStatus.BAD_REQUEST,
       );
     }
     if (response.status === 204) return undefined as T;
@@ -114,6 +156,10 @@ export class AuthService {
 
   private normalizePhone(phone: string): string {
     return `+91${phone}`;
+  }
+
+  private normalizeEmail(email: string): string {
+    return email.trim().toLowerCase();
   }
 
   async getProfile(token: string): Promise<AuthUserResponse> {
@@ -133,6 +179,44 @@ export class AuthService {
       tokenType: session.token_type,
       user: this.mapUser(session.user),
     };
+  }
+
+  private getSignUpUser(response: SupabaseEmailSignUpResponse): SupabaseUser {
+    if (response.user) return response.user;
+    if (typeof response.id === 'string') {
+      return {
+        id: response.id,
+        phone: response.phone,
+        email: response.email,
+        user_metadata: response.user_metadata,
+      };
+    }
+    throw new BusinessException(
+      ErrorCode.AUTH_PROVIDER_ERROR,
+      'Authentication service returned an invalid response',
+      HttpStatus.BAD_GATEWAY,
+    );
+  }
+
+  private mapOptionalSession(
+    response: SupabaseEmailSignUpResponse,
+    user: SupabaseUser,
+  ): AuthSessionResponse | null {
+    if (
+      typeof response.access_token !== 'string' ||
+      typeof response.refresh_token !== 'string' ||
+      typeof response.expires_in !== 'number' ||
+      typeof response.token_type !== 'string'
+    ) {
+      return null;
+    }
+    return this.mapSession({
+      access_token: response.access_token,
+      refresh_token: response.refresh_token,
+      expires_in: response.expires_in,
+      token_type: response.token_type,
+      user,
+    });
   }
 
   private mapUser(user: SupabaseUser): AuthUserResponse {
