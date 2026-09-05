@@ -13,6 +13,18 @@ export interface SupabaseSession {
   user: SupabaseUser;
 }
 
+export interface SupabaseEmailSignUpResponse {
+  id?: string;
+  phone?: string;
+  email?: string;
+  user_metadata?: Record<string, unknown>;
+  access_token?: string | null;
+  refresh_token?: string | null;
+  expires_in?: number | null;
+  token_type?: string | null;
+  user?: SupabaseUser;
+}
+
 export interface AuthUserResponse {
   id: string;
   phone: string | null;
@@ -29,4 +41,10 @@ export interface AuthSessionResponse {
   expiresIn: number;
   tokenType: string;
   user: AuthUserResponse;
+}
+
+export interface AuthRegistrationResponse {
+  confirmationRequired: boolean;
+  user: AuthUserResponse;
+  session: AuthSessionResponse | null;
 }

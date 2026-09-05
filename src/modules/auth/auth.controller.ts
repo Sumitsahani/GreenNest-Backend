@@ -3,13 +3,36 @@ import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagg
 import { ErrorCode } from '../../common/constants/error-code';
 import { BusinessException } from '../../common/exceptions/business.exception';
 import { AuthService } from './auth.service';
-import type { AuthSessionResponse, AuthUserResponse } from './auth.types';
-import { RefreshTokenDto, RequestOtpDto, UpdateProfileDto, VerifyOtpDto } from './dto/auth.dto';
+import type { AuthRegistrationResponse, AuthSessionResponse, AuthUserResponse } from './auth.types';
+import {
+  EmailCredentialsDto,
+  RefreshTokenDto,
+  RequestOtpDto,
+  UpdateProfileDto,
+  VerifyOtpDto,
+} from './dto/auth.dto';
 
 @ApiTags('Authentication')
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
+
+  @Post('register')
+  @ApiOperation({ summary: 'Create an account with email and password' })
+  @ApiResponse({ status: 201, description: 'Account created; email confirmation may be required' })
+  @ApiResponse({ status: 400, description: 'Invalid details or account creation failed' })
+  register(@Body() dto: EmailCredentialsDto): Promise<AuthRegistrationResponse> {
+    return this.authService.registerWithEmail(dto.email, dto.password);
+  }
+
+  @Post('login')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Sign in with email and password' })
+  @ApiResponse({ status: 200, description: 'Authenticated session created' })
+  @ApiResponse({ status: 401, description: 'Invalid login credentials' })
+  login(@Body() dto: EmailCredentialsDto): Promise<AuthSessionResponse> {
+    return this.authService.loginWithEmail(dto.email, dto.password);
+  }
 
   @Post('otp/request')
   @HttpCode(HttpStatus.OK)
