@@ -18,5 +18,8 @@ export const environmentValidationSchema = Joi.object({
   THROTTLE_LIMIT: Joi.number().integer().positive().default(100),
   GEMINI_API_KEY: Joi.string().min(20).optional(),
   GEMINI_MODEL: Joi.string().default('gemini-2.5-flash'),
+  GEMINI_IDENTIFICATION_MODELS: Joi.string().optional(),
+  OPENAI_API_KEY: Joi.string().min(20).optional(),
+  OPENAI_VISION_MODELS: Joi.string().optional(),
   SUPPORT_API_KEY: Joi.string().min(32).optional().allow(''),
 });

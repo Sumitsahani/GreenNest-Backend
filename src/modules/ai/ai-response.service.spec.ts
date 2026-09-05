@@ -14,9 +14,15 @@ describe('detectResponseLanguage', () => {
 describe('AiResponseService plant identification', () => {
   const originalKey = process.env.GEMINI_API_KEY;
   const originalUrl = process.env.SUPABASE_URL;
+  const originalGeminiModels = process.env.GEMINI_IDENTIFICATION_MODELS;
+  const originalOpenAiKey = process.env.OPENAI_API_KEY;
+  const originalOpenAiModels = process.env.OPENAI_VISION_MODELS;
 
   beforeEach(() => {
     process.env.GEMINI_API_KEY = 'test-gemini-key-that-is-long-enough';
+    process.env.GEMINI_IDENTIFICATION_MODELS = 'gemini-first,gemini-second';
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_VISION_MODELS;
     process.env.SUPABASE_URL = 'https://project.supabase.co';
   });
 
@@ -26,6 +32,12 @@ describe('AiResponseService plant identification', () => {
     else process.env.GEMINI_API_KEY = originalKey;
     if (originalUrl === undefined) delete process.env.SUPABASE_URL;
     else process.env.SUPABASE_URL = originalUrl;
+    if (originalGeminiModels === undefined) delete process.env.GEMINI_IDENTIFICATION_MODELS;
+    else process.env.GEMINI_IDENTIFICATION_MODELS = originalGeminiModels;
+    if (originalOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = originalOpenAiKey;
+    if (originalOpenAiModels === undefined) delete process.env.OPENAI_VISION_MODELS;
+    else process.env.OPENAI_VISION_MODELS = originalOpenAiModels;
   });
 
   it('accepts a stored image and parses fenced Gemini JSON safely', async () => {
@@ -134,6 +146,7 @@ describe('AiResponseService plant identification', () => {
           headers: { 'content-type': 'image/jpeg' },
         }),
       )
+      .mockResolvedValueOnce(new Response('{}', { status: 429 }))
       .mockResolvedValueOnce(new Response('{}', { status: 429 }));
 
     await expect(
@@ -144,5 +157,52 @@ describe('AiResponseService plant identification', () => {
       code: ErrorCode.SERVICE_UNAVAILABLE,
       message: 'Plant recognition is busy right now. Please wait a moment and try again.',
     });
+  });
+
+  it('uses OpenAI after every configured Gemini model is unavailable', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key-that-is-long-enough';
+    process.env.OPENAI_VISION_MODELS = 'gpt-vision-fallback';
+    const fetchMock = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { 'content-type': 'image/jpeg' },
+        }),
+      )
+      .mockResolvedValueOnce(new Response('{}', { status: 429 }))
+      .mockResolvedValueOnce(new Response('{}', { status: 503 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            output_text: JSON.stringify({
+              containsRealPlant: true,
+              imageCategory: 'LIVE_PLANT',
+              classificationConfidence: 0.96,
+              rejectionReason: null,
+              name: 'Snake Plant',
+              species: 'Dracaena trifasciata',
+              confidence: 0.93,
+              suggestedLocation: 'Bright indirect light',
+              notes: 'Allow the soil to dry between watering.',
+            }),
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      );
+
+    const result = await new AiResponseService().identifyPlant(
+      'https://project.supabase.co/storage/v1/object/public/user-photos/user/plants/snake.jpg',
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        containsRealPlant: true,
+        name: 'Snake Plant',
+        species: 'Dracaena trifasciata',
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock.mock.calls[3]?.[0]).toBe('https://api.openai.com/v1/responses');
   });
 });
