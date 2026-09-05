@@ -4,9 +4,13 @@ import {
   type OnApplicationBootstrap,
   type OnApplicationShutdown,
 } from '@nestjs/common';
-import { PlantLifecycleStatus } from '@prisma/client';
+import { NotificationAgeGroup, NotificationTone, PlantLifecycleStatus } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 import { ExpoPushService } from './expo-push.service';
+import {
+  NotificationCopyService,
+  type WeatherNotificationFacts,
+} from './notification-copy.service';
 
 const checkIntervalMs = 15 * 60_000;
 const alertCooldownMs = 8 * 60 * 60_000;
@@ -98,6 +102,7 @@ export class WeatherAlertDispatcherService
   constructor(
     private readonly prisma: PrismaService,
     private readonly push: ExpoPushService,
+    private readonly copy: NotificationCopyService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -194,7 +199,12 @@ export class WeatherAlertDispatcherService
     });
     if (alreadySent) return;
 
-    const content = this.createContent(plants, risk);
+    const facts = this.createFacts(plants, risk);
+    const content = await this.copy.weatherAlert(
+      facts,
+      settings?.notificationAgeGroup ?? NotificationAgeGroup.UNSPECIFIED,
+      settings?.notificationTone ?? NotificationTone.AUTO,
+    );
     const delivery = await this.push.sendToUser(first.userId, {
       ...content,
       url: '/(tabs)/garden',
@@ -241,15 +251,9 @@ export class WeatherAlertDispatcherService
     return evaluateThreeHourRain(((await response.json()) as ForecastResponse).hourly);
   }
 
-  private createContent(
-    plants: AlertPlant[],
-    risk: HeavyRainRisk,
-  ): { title: string; body: string } {
+  private createFacts(plants: AlertPlant[], risk: HeavyRainRisk): WeatherNotificationFacts {
     const location = plants[0]?.weatherLocation ?? plants[0]?.location ?? 'your garden';
-    const names = plants
-      .slice(0, 2)
-      .map((plant) => plant.name)
-      .join(' & ');
+    const names = plants.slice(0, 2).map((plant) => plant.name);
     const recentlyWatered = plants.some(
       (plant) =>
         plant.lastWateredAt && plant.lastWateredAt.getTime() >= Date.now() - 2 * 86_400_000,
@@ -257,14 +261,14 @@ export class WeatherAlertDispatcherService
     const rainSensitive = plants.some((plant) =>
       rainSensitivePattern.test(`${plant.name} ${plant.species ?? ''} ${plant.category ?? ''}`),
     );
-    const protection =
-      recentlyWatered || rainSensitive
-        ? `${names} ko rain party se break do—ye pehle hi hydrated hain.`
-        : `${names} ke pots ko cover ke neeche rakho aur drainage check kar lo.`;
-    const wind = risk.windGustKmh >= 40 ? ' Hawa tez hogi, pots ko secure bhi kar dena.' : '';
     return {
-      title: '⛈️ Important: next 3 hours heavy rain',
-      body: `${location} me ${risk.probability}% chance aur lagbhag ${Math.round(risk.precipitationMm)} mm rain forecast hai. ${protection}${wind}`,
+      location,
+      plantNames: names,
+      probability: risk.probability,
+      precipitationMm: risk.precipitationMm,
+      windGustKmh: risk.windGustKmh,
+      recentlyWatered: Boolean(recentlyWatered),
+      rainSensitive,
     };
   }
 }
