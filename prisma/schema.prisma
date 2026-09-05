@@ -168,6 +168,22 @@ enum AiMemoryType {
   SUCCESSFUL_CARE_PATTERN
 }
 
+enum PushPlatform {
+  ANDROID
+  IOS
+}
+
+enum SupportConversationStatus {
+  OPEN
+  CLOSED
+}
+
+enum SupportMessageSender {
+  USER
+  SUPPORT
+  SYSTEM
+}
+
 model Category {
   id        String    @id @default(uuid()) @db.Uuid
   name      String    @unique
@@ -360,6 +376,7 @@ model CareReminder {
   type        CareType
   scheduledAt DateTime
   enabled     Boolean     @default(true)
+  lastNotifiedAt DateTime?
   plant       GardenPlant @relation(fields: [plantId], references: [id], onDelete: Cascade)
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
@@ -560,6 +577,44 @@ model Notification {
 
   @@index([userId, createdAt])
   @@index([userId, readAt])
+}
+
+model PushDevice {
+  id         String       @id @default(uuid()) @db.Uuid
+  userId     String       @db.Uuid
+  token      String       @unique
+  platform   PushPlatform
+  active     Boolean      @default(true)
+  lastSeenAt DateTime     @default(now())
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  @@index([userId, active])
+}
+
+model SupportConversation {
+  id            String                    @id @default(uuid()) @db.Uuid
+  userId        String                    @db.Uuid
+  subject       String
+  status        SupportConversationStatus @default(OPEN)
+  lastMessageAt DateTime                  @default(now())
+  messages      SupportMessage[]
+  createdAt     DateTime                  @default(now())
+  updatedAt     DateTime                  @updatedAt
+
+  @@index([userId, status, lastMessageAt])
+}
+
+model SupportMessage {
+  id             String               @id @default(uuid()) @db.Uuid
+  conversationId String               @db.Uuid
+  sender         SupportMessageSender
+  message        String
+  readAt         DateTime?
+  conversation   SupportConversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  createdAt      DateTime             @default(now())
+
+  @@index([conversationId, createdAt])
 }
 
 model AiConversation {
