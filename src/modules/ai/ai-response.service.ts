@@ -8,6 +8,26 @@ export interface ConversationTurn {
   content: string;
 }
 
+export type ResponseLanguage = 'ENGLISH' | 'HINGLISH' | 'HINDI';
+
+export function detectResponseLanguage(question: string): ResponseLanguage {
+  if (/[ऀ-ॿ]/u.test(question)) return 'HINDI';
+  const romanHindiMarkers = question.match(
+    /\b(?:kya|kyu|kyon|kaise|kab|kahan|mera|meri|mere|isko|usko|mujhe|paani|pani|mitti|patta|patte|dhoop|nahi|nahin|karu|karna|hoga|raha|rahi|hai|hain|wala|wali|aur|par|pe|ko)\b/gi,
+  );
+  return romanHindiMarkers?.length ? 'HINGLISH' : 'ENGLISH';
+}
+
+function languageInstruction(language: ResponseLanguage): string {
+  if (language === 'HINDI') {
+    return 'Reply only in natural Hindi using Devanagari script. Keep plant names understandable.';
+  }
+  if (language === 'HINGLISH') {
+    return 'Reply only in natural Roman-script Hinglish, mixing simple Hindi and English the way the user did. Do not switch to Devanagari Hindi or full English.';
+  }
+  return 'Reply only in natural English. Do not switch to Hindi or Hinglish.';
+}
+
 export interface PlantIdentificationResult {
   containsRealPlant: boolean;
   imageCategory:
@@ -82,78 +102,82 @@ export class AiResponseService {
     }
   }
 
-  private async identifyPlantWithGemini(
-    imageUrl: string,
-  ): Promise<PlantIdentificationResult> {
+  private async identifyPlantWithGemini(imageUrl: string): Promise<PlantIdentificationResult> {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error('Gemini is not configured');
     const imagePart = await this.loadImage(imageUrl);
     const model = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash';
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text: 'First verify whether this is a direct photo of a real living plant. A plant picture printed on a book, document, poster, package, painting, phone, TV, or computer screen is NOT a real plant. Artificial/plastic plants are also NOT real plants. Classify the image medium before identifying species. Set containsRealPlant=true only when a physical living plant is clearly visible. If false or unclear, use Unknown for name/species, keep species confidence below 0.3, and explain the rejection briefly. For a real plant, return a concise common name, scientific species, suitable placement, and one care note.',
-              },
-              imagePart,
-            ],
-          },
-        ],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: 'OBJECT',
-            required: [
-              'name',
-              'species',
-              'confidence',
-              'suggestedLocation',
-              'notes',
-              'containsRealPlant',
-              'imageCategory',
-              'classificationConfidence',
-              'rejectionReason',
-            ],
-            properties: {
-              containsRealPlant: { type: 'BOOLEAN' },
-              imageCategory: {
-                type: 'STRING',
-                enum: [
-                  'LIVE_PLANT',
-                  'PLANT_IMAGE_OR_PRINT',
-                  'BOOK_OR_DOCUMENT',
-                  'POSTER_OR_ARTWORK',
-                  'SCREEN',
-                  'ARTIFICIAL_PLANT',
-                  'OTHER',
-                  'UNCLEAR',
-                ],
-              },
-              classificationConfidence: {
-                type: 'NUMBER',
-                minimum: 0,
-                maximum: 1,
-              },
-              rejectionReason: { type: 'STRING' },
-              name: { type: 'STRING' },
-              species: { type: 'STRING' },
-              confidence: { type: 'NUMBER', minimum: 0, maximum: 1 },
-              suggestedLocation: { type: 'STRING' },
-              notes: { type: 'STRING' },
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  text: 'First verify whether this is a direct photo of a real living plant. A plant picture printed on a book, document, poster, package, painting, phone, TV, or computer screen is NOT a real plant. Artificial/plastic plants are also NOT real plants. Classify the image medium before identifying species. Set containsRealPlant=true only when a physical living plant is clearly visible. If false or unclear, use Unknown for name/species, keep species confidence below 0.3, and explain the rejection briefly. For a real plant, return a concise common name, scientific species, suitable placement, and one care note.',
+                },
+                imagePart,
+              ],
             },
+          ],
+          generationConfig: {
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: 'OBJECT',
+              required: [
+                'name',
+                'species',
+                'confidence',
+                'suggestedLocation',
+                'notes',
+                'containsRealPlant',
+                'imageCategory',
+                'classificationConfidence',
+                'rejectionReason',
+              ],
+              properties: {
+                containsRealPlant: { type: 'BOOLEAN' },
+                imageCategory: {
+                  type: 'STRING',
+                  enum: [
+                    'LIVE_PLANT',
+                    'PLANT_IMAGE_OR_PRINT',
+                    'BOOK_OR_DOCUMENT',
+                    'POSTER_OR_ARTWORK',
+                    'SCREEN',
+                    'ARTIFICIAL_PLANT',
+                    'OTHER',
+                    'UNCLEAR',
+                  ],
+                },
+                classificationConfidence: {
+                  type: 'NUMBER',
+                  minimum: 0,
+                  maximum: 1,
+                },
+                rejectionReason: { type: 'STRING' },
+                name: { type: 'STRING' },
+                species: { type: 'STRING' },
+                confidence: { type: 'NUMBER', minimum: 0, maximum: 1 },
+                suggestedLocation: { type: 'STRING' },
+                notes: { type: 'STRING' },
+              },
+            },
+            thinkingConfig: { thinkingBudget: 0 },
+            temperature: 0.1,
+            maxOutputTokens: 600,
           },
-          thinkingConfig: { thinkingBudget: 0 },
-          temperature: 0.1,
-          maxOutputTokens: 600,
-        },
-      }),
-      signal: AbortSignal.timeout(35_000),
-    });
+        }),
+        signal: AbortSignal.timeout(35_000),
+      },
+    );
     if (!response.ok) throw new Error(`Gemini identification failed: HTTP ${response.status}`);
-    const body = (await response.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+    const body = (await response.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
     const text = body.candidates?.[0]?.content?.parts
       ?.map((part) => part.text ?? '')
       .join('')
@@ -184,9 +208,7 @@ export class AiResponseService {
     )
       ? (requestedCategory as PlantIdentificationResult['imageCategory'])
       : 'UNCLEAR';
-    const classificationConfidence = confidenceValue(
-      result.classificationConfidence,
-    );
+    const classificationConfidence = confidenceValue(result.classificationConfidence);
     const containsRealPlant =
       result.containsRealPlant === true &&
       imageCategory === 'LIVE_PLANT' &&
@@ -205,21 +227,14 @@ export class AiResponseService {
       name: containsRealPlant
         ? textValue(result.name, 'Unknown plant').slice(0, 100)
         : 'Unknown plant',
-      species: containsRealPlant
-        ? textValue(result.species, 'Unknown').slice(0, 140)
-        : 'Unknown',
+      species: containsRealPlant ? textValue(result.species, 'Unknown').slice(0, 140) : 'Unknown',
       confidence: containsRealPlant
         ? identificationConfidence
         : Math.min(0.29, identificationConfidence),
       suggestedLocation: containsRealPlant
-        ? textValue(result.suggestedLocation, 'Bright indirect light').slice(
-            0,
-            200,
-          )
+        ? textValue(result.suggestedLocation, 'Bright indirect light').slice(0, 200)
         : '',
-      notes: containsRealPlant
-        ? textValue(result.notes, '').slice(0, 500)
-        : '',
+      notes: containsRealPlant ? textValue(result.notes, '').slice(0, 500) : '',
     };
   }
 
@@ -229,22 +244,31 @@ export class AiResponseService {
     imageUrl?: string,
     history: ConversationTurn[] = [],
   ): Promise<string> {
+    const language = detectResponseLanguage(question);
     const apiKey = process.env.GEMINI_API_KEY;
     if (apiKey) {
       try {
-        return await this.generateWithGemini(apiKey, question, context, imageUrl, history);
+        return await this.generateWithGemini(
+          apiKey,
+          question,
+          context,
+          language,
+          imageUrl,
+          history,
+        );
       } catch (error) {
         const message = error instanceof Error ? error.message : 'unknown error';
         this.logger.warn(`Gemini request failed; using local fallback: ${message}`);
       }
     }
-    return this.generateFallback(question, context);
+    return this.generateFallback(question, context, language);
   }
 
   private async generateWithGemini(
     apiKey: string,
     question: string,
     context: AiContext,
+    language: ResponseLanguage,
     imageUrl?: string,
     history: ConversationTurn[] = [],
   ): Promise<string> {
@@ -257,9 +281,11 @@ export class AiResponseService {
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
         body: JSON.stringify({
           systemInstruction: {
-            parts: [{
-              text: 'You are GreenNest Plant Intelligence, a concise and practical gardening assistant. Match the user in Hindi, Hinglish, or English. Use current verified plant data and current plant history before generic knowledge. Direct user statements and corrections outrank AI inference. Historical outcomes and repeated user patterns are supporting evidence only and must never override conflicting current evidence. Never invent plant history, preferences, events, causes, or sources. Distinguish user-reported causes from AI inferences and never present uncertainty as fact. Explain advice using only supplied signals. If evidence is insufficient, state what is unknown. Never claim that the model was retrained. For photos, describe visible symptoms, offer possible causes with uncertainty, practical next steps, and ask for missing details. Include safety warnings for pesticides, toxic plants, or consumption.',
-            }],
+            parts: [
+              {
+                text: `You are GreenNest Plant Coach, a concise and practical gardening assistant. ${languageInstruction(language)} Always follow the CURRENT QUESTION language, even if conversation history uses another language. Use current verified plant data and current plant history before generic knowledge. Direct user statements and corrections outrank AI inference. Historical outcomes and repeated user patterns are supporting evidence only and must never override conflicting current evidence. Never invent plant history, preferences, events, causes, or sources. Distinguish user-reported causes from AI inferences and never present uncertainty as fact. Give a direct answer first, then short practical steps when useful. Use simple headings or bullets for multi-step advice. If evidence is insufficient, state what is unknown. Never mention the underlying model or provider. Never claim that the model was retrained. For photos, describe visible symptoms, offer possible causes with uncertainty, practical next steps, and ask for missing details. Include safety warnings for pesticides, toxic plants, or consumption.`,
+              },
+            ],
           },
           contents: [
             ...history.map((turn) => ({
@@ -291,10 +317,16 @@ export class AiResponseService {
     return text;
   }
 
-  private async loadImage(imageUrl: string): Promise<{ inlineData: { mimeType: string; data: string } }> {
+  private async loadImage(
+    imageUrl: string,
+  ): Promise<{ inlineData: { mimeType: string; data: string } }> {
     const url = new URL(imageUrl);
     const supabaseHost = new URL(process.env.SUPABASE_URL ?? '').hostname;
-    if (url.protocol !== 'https:' || url.hostname !== supabaseHost || !url.pathname.includes('/storage/v1/object/public/user-photos/')) {
+    if (
+      url.protocol !== 'https:' ||
+      url.hostname !== supabaseHost ||
+      !url.pathname.includes('/storage/v1/object/public/user-photos/')
+    ) {
       throw new Error('Unsupported image URL');
     }
     const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
@@ -309,27 +341,55 @@ export class AiResponseService {
       heic: 'image/heic',
       heif: 'image/heif',
     };
-    const mimeType =
-      responseMimeType?.startsWith('image/')
-        ? responseMimeType
-        : mimeByExtension[extension ?? ''] ?? 'image/jpeg';
-    if (!['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'].includes(mimeType)) throw new Error('Unsupported image type');
+    const mimeType = responseMimeType?.startsWith('image/')
+      ? responseMimeType
+      : (mimeByExtension[extension ?? ''] ?? 'image/jpeg');
+    if (!['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'].includes(mimeType))
+      throw new Error('Unsupported image type');
     const bytes = Buffer.from(await response.arrayBuffer());
     if (bytes.byteLength > 15 * 1024 * 1024) throw new Error('Image is too large');
     return { inlineData: { mimeType, data: bytes.toString('base64') } };
   }
 
-  private generateFallback(question: string, context: AiContext): string {
+  private generateFallback(
+    question: string,
+    context: AiContext,
+    language: ResponseLanguage,
+  ): string {
     const lower = question.toLowerCase();
     const facts = new Map(context.memories.map((item) => [item.memoryKey, item.memoryValue]));
     const personalization = [facts.get('gardening_experience'), facts.get('growing_space')]
       .filter(Boolean)
       .join(', ');
-    if (/water|watering/.test(lower) && context.garden.length) {
+    if (/water|watering|paani|pani|jal|पानी|सिंचाई/.test(lower) && context.garden.length) {
       const next = [...context.garden].sort(
         (a, b) => a.nextWateringAt.getTime() - b.nextWateringAt.getTime(),
       )[0];
-      if (next) return `${next.name} is your next scheduled plant to check for watering on ${next.nextWateringAt.toISOString().slice(0, 10)}. Check the top 2-3 cm of soil first; water only if it feels dry.`;
+      if (next) {
+        const date = next.nextWateringAt.toLocaleDateString(
+          language === 'HINDI' ? 'hi-IN' : 'en-IN',
+          { day: 'numeric', month: 'short' },
+        );
+        if (language === 'HINGLISH') {
+          return `${next.name} ka next soil check ${date} ko hai. Pehle upar ki 2–3 cm mitti touch karke dekho; dry lage tabhi paani do.`;
+        }
+        if (language === 'HINDI') {
+          return `${next.name} की मिट्टी जाँचने की अगली तारीख ${date} है। पहले ऊपर की 2–3 सेमी मिट्टी छूकर देखें; सूखी लगे तभी पानी दें।`;
+        }
+        return `${next.name} is next for a soil check on ${date}. Touch the top 2–3 cm first and water only if it feels dry.`;
+      }
+    }
+    if (language === 'HINGLISH') {
+      const known = context.garden.length
+        ? `Main aapke ${context.garden.length} saved plants ka data use kar sakta hoon`
+        : 'Abhi koi saved plant nahi mila';
+      return `${known}${personalization ? ` aur saved context (${personalization})` : ''}. Accurate answer ke liye plant ka naam, light aur soil condition bata do.`;
+    }
+    if (language === 'HINDI') {
+      const known = context.garden.length
+        ? `मैं आपके ${context.garden.length} सहेजे गए पौधों की जानकारी इस्तेमाल कर सकता हूँ`
+        : 'अभी कोई सहेजा गया पौधा नहीं मिला';
+      return `${known}। सटीक जवाब के लिए पौधे का नाम, रोशनी और मिट्टी की स्थिति बताएँ।`;
     }
     const known = context.garden.length
       ? `I can use your ${context.garden.length} saved garden plants`

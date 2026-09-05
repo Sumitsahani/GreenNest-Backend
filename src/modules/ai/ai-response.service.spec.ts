@@ -1,5 +1,15 @@
 import { ErrorCode } from '../../common/constants/error-code';
-import { AiResponseService } from './ai-response.service';
+import { AiResponseService, detectResponseLanguage } from './ai-response.service';
+
+describe('detectResponseLanguage', () => {
+  it.each([
+    ['Why are my plant leaves turning yellow?', 'ENGLISH'],
+    ['Mere plant ke leaves yellow kyu ho rahe hain?', 'HINGLISH'],
+    ['मेरे पौधे की पत्तियाँ पीली क्यों हो रही हैं?', 'HINDI'],
+  ] as const)('maps %s to %s', (question, language) => {
+    expect(detectResponseLanguage(question)).toBe(language);
+  });
+});
 
 describe('AiResponseService plant identification', () => {
   const originalKey = process.env.GEMINI_API_KEY;
@@ -132,8 +142,7 @@ describe('AiResponseService plant identification', () => {
       ),
     ).rejects.toMatchObject({
       code: ErrorCode.SERVICE_UNAVAILABLE,
-      message:
-        'Plant recognition is busy right now. Please wait a moment and try again.',
+      message: 'Plant recognition is busy right now. Please wait a moment and try again.',
     });
   });
 });
