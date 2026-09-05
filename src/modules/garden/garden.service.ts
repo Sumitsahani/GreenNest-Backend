@@ -1,5 +1,5 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { Prisma, type CareReminder } from '@prisma/client';
+import { CareType, PlantLifecycleStatus, Prisma, type CareReminder } from '@prisma/client';
 import { ErrorCode } from '../../common/constants/error-code';
 import { BusinessException } from '../../common/exceptions/business.exception';
 import { PrismaService } from '../../database/prisma.service';
@@ -10,8 +10,8 @@ import {
   type CreateReminderDto,
 } from './dto/garden.dto';
 import { GardenCarePlanService } from './garden-care-plan.service';
-import { PlantLifecycleStatus } from '@prisma/client';
 import { PlantIntelligenceService } from '../intelligence/plant-intelligence.service';
+import { WeatherCareService, type SmartCareReminder } from './weather-care.service';
 
 export type GardenPlantResponse = Prisma.GardenPlantGetPayload<{ include: { careEvents: true } }>;
 
@@ -21,6 +21,7 @@ export class GardenService {
     private readonly prisma: PrismaService,
     private readonly carePlans: GardenCarePlanService,
     private readonly intelligence: PlantIntelligenceService,
+    private readonly weatherCare: WeatherCareService,
   ) {}
   list(userId: string): Promise<GardenPlantResponse[]> {
     return this.prisma.gardenPlant.findMany({
@@ -33,7 +34,14 @@ export class GardenService {
     });
   }
   async create(userId: string, dto: CreatePlantDto): Promise<GardenPlantResponse> {
-    const plan = await this.carePlans.create(dto);
+    const [plan, weatherLocation] = await Promise.all([
+      this.carePlans.create(dto),
+      this.weatherCare.resolveLocation({
+        label: dto.weatherLocation,
+        latitude: dto.latitude,
+        longitude: dto.longitude,
+      }),
+    ]);
     const lastWateredAt = new Date(dto.lastWateredAt);
     const nextWateringAt = new Date(lastWateredAt);
     nextWateringAt.setDate(nextWateringAt.getDate() + plan.wateringDays);
@@ -43,6 +51,9 @@ export class GardenService {
         name: dto.name,
         species: dto.species,
         location: dto.location,
+        weatherLocation: weatherLocation?.label ?? dto.weatherLocation,
+        latitude: weatherLocation?.latitude,
+        longitude: weatherLocation?.longitude,
         notes: dto.notes,
         imageUrl: dto.imageUrl,
         category: dto.category,
@@ -51,7 +62,13 @@ export class GardenService {
         lastWateredAt,
         nextWateringAt,
         ...plan,
-        careEvents: { create: { type: CareAction.WATER, caredAt: lastWateredAt, note: 'Last watering provided when plant was added' } },
+        careEvents: {
+          create: {
+            type: CareAction.WATER,
+            caredAt: lastWateredAt,
+            note: 'Last watering provided when plant was added',
+          },
+        },
         reminders: { create: { type: CareAction.WATER, scheduledAt: nextWateringAt } },
       },
       include: { careEvents: true },
@@ -73,8 +90,16 @@ export class GardenService {
         'Garden plant not found',
         HttpStatus.NOT_FOUND,
       );
-    const genericFallback = plant.carePlan === 'Check the top 2-3 cm of soil before watering. Water thoroughly only when it feels dry and ensure drainage.';
-    if (!plant.carePlan || !plant.idealSunlight || !plant.placementAdvice || !plant.summerWatering || genericFallback) {
+    const genericFallback =
+      plant.carePlan ===
+      'Check the top 2-3 cm of soil before watering. Water thoroughly only when it feels dry and ensure drainage.';
+    if (
+      !plant.carePlan ||
+      !plant.idealSunlight ||
+      !plant.placementAdvice ||
+      !plant.summerWatering ||
+      genericFallback
+    ) {
       const plan = await this.carePlans.create({
         name: plant.name,
         species: plant.species ?? undefined,
@@ -103,16 +128,22 @@ export class GardenService {
     const plant = await this.detail(userId, id);
     const nextWateringAt = new Date();
     nextWateringAt.setDate(nextWateringAt.getDate() + plant.wateringDays);
-    await this.prisma.$transaction([
-      this.prisma.careEvent.create({ data: { plantId: id, type: dto.type, note: dto.note } }),
-      this.prisma.gardenPlant.update({
+    await this.prisma.$transaction(async (tx) => {
+      await tx.careEvent.create({ data: { plantId: id, type: dto.type, note: dto.note } });
+      await tx.gardenPlant.update({
         where: { id },
         data:
           dto.type === CareAction.WATER
             ? { nextWateringAt, lastWateredAt: new Date(), health: Math.min(100, plant.health + 3) }
             : {},
-      }),
-    ]);
+      });
+      if (dto.type === CareAction.WATER) {
+        await tx.careReminder.updateMany({
+          where: { plantId: id, type: CareType.WATER, enabled: true },
+          data: { scheduledAt: nextWateringAt },
+        });
+      }
+    });
     await this.intelligence.recordCareEvent(userId, id, dto.type, dto.note);
     return this.detail(userId, id);
   }
@@ -121,6 +152,75 @@ export class GardenService {
     return this.prisma.careReminder.findMany({
       where: { plantId },
       orderBy: { scheduledAt: 'asc' },
+    });
+  }
+
+  async smartReminders(userId: string): Promise<SmartCareReminder[]> {
+    const plants = await this.prisma.gardenPlant.findMany({
+      where: {
+        userId,
+        lifecycleStatus: { in: [PlantLifecycleStatus.ACTIVE, PlantLifecycleStatus.MOVED] },
+      },
+      include: {
+        reminders: {
+          where: { type: CareType.WATER },
+          orderBy: { scheduledAt: 'asc' },
+          take: 1,
+        },
+      },
+      orderBy: { nextWateringAt: 'asc' },
+      take: 50,
+    });
+    const reminders = await Promise.all(
+      plants.map((plant) =>
+        this.weatherCare.createReminder({
+          id: plant.id,
+          name: plant.name,
+          location: plant.location,
+          weatherLocation: plant.weatherLocation,
+          latitude: plant.latitude,
+          longitude: plant.longitude,
+          wateringDays: plant.wateringDays,
+          lastWateredAt: plant.lastWateredAt,
+          nextWateringAt: plant.nextWateringAt,
+          reminder: plant.reminders[0] ?? null,
+        }),
+      ),
+    );
+    return reminders.sort(
+      (left, right) => left.scheduledAt.getTime() - right.scheduledAt.getTime(),
+    );
+  }
+
+  async smartReminder(userId: string, plantId: string): Promise<SmartCareReminder> {
+    const plant = await this.prisma.gardenPlant.findFirst({
+      where: { id: plantId, userId },
+      include: {
+        reminders: {
+          where: { type: CareType.WATER },
+          orderBy: { scheduledAt: 'asc' },
+          take: 1,
+        },
+      },
+    });
+    if (!plant) {
+      throw new BusinessException(
+        ErrorCode.NOT_FOUND,
+        'Garden plant not found',
+        HttpStatus.NOT_FOUND,
+      );
+    }
+    return this.weatherCare.createReminder({
+      id: plant.id,
+      name: plant.name,
+      location: plant.location,
+      weatherLocation: plant.weatherLocation,
+      latitude: plant.latitude,
+      longitude: plant.longitude,
+      wateringDays: plant.wateringDays,
+      lastWateredAt: plant.lastWateredAt,
+      nextWateringAt: plant.nextWateringAt,
+      reminder: plant.reminders[0] ?? null,
     });
   }
   async createReminder(

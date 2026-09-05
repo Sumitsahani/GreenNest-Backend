@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import type { CareReminder } from '@prisma/client';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, type AuthenticatedUser } from '../../common/auth/authenticated-user';
 import { SupabaseAuthGuard } from '../../common/auth/supabase-auth.guard';
 import {
@@ -11,6 +11,7 @@ import {
 } from './dto/garden.dto';
 import { GardenService } from './garden.service';
 import type { GardenPlantResponse } from './garden.service';
+import type { SmartCareReminder } from './weather-care.service';
 
 @ApiTags('My Garden')
 @ApiBearerAuth()
@@ -26,6 +27,21 @@ export class GardenController {
     @Body() dto: CreatePlantDto,
   ): Promise<GardenPlantResponse> {
     return this.garden.create(user.id, dto);
+  }
+  @Get('smart-reminders')
+  @ApiOperation({
+    summary: 'Get weather-adjusted watering reminders for every plant location',
+  })
+  smartReminders(@CurrentUser() user: AuthenticatedUser): Promise<SmartCareReminder[]> {
+    return this.garden.smartReminders(user.id);
+  }
+  @Get(':id/smart-care')
+  @ApiOperation({ summary: 'Get plant-specific weather and smart watering advice' })
+  smartReminder(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<SmartCareReminder> {
+    return this.garden.smartReminder(user.id, id);
   }
   @Get(':id') detail(
     @CurrentUser() user: AuthenticatedUser,

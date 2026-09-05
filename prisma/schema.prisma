@@ -304,6 +304,9 @@ model GardenPlant {
   name            String
   species         String?
   location        String
+  weatherLocation String?
+  latitude        Float?
+  longitude       Float?
   notes           String?
   imageUrl        String?
   health          Int            @default(100)

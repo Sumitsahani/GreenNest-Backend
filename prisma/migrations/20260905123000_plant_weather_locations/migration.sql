@@ -1,0 +1,4 @@
+ALTER TABLE "GardenPlant"
+ADD COLUMN "weatherLocation" TEXT,
+ADD COLUMN "latitude" DOUBLE PRECISION,
+ADD COLUMN "longitude" DOUBLE PRECISION;
