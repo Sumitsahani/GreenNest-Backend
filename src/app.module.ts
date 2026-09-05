@@ -19,6 +19,8 @@ import { AccountModule } from './modules/account/account.module';
 import { RewardsModule } from './modules/rewards/rewards.module';
 import { AiModule } from './modules/ai/ai.module';
 import { IntelligenceModule } from './modules/intelligence/intelligence.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
+import { SupportModule } from './modules/support/support.module';
 
 @Module({
   imports: [
@@ -51,6 +53,8 @@ import { IntelligenceModule } from './modules/intelligence/intelligence.module';
     RewardsModule,
     AiModule,
     IntelligenceModule,
+    NotificationsModule,
+    SupportModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

@@ -14,7 +14,13 @@ export function setupApp(app: INestApplication): void {
   app.enableCors({
     origin: config.get<string[]>('corsOrigins', []),
     credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'Idempotency-Key'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'X-Request-ID',
+      'Idempotency-Key',
+      'X-Support-Key',
+    ],
     exposedHeaders: ['X-Request-ID'],
   });
   app.setGlobalPrefix('api/v1');

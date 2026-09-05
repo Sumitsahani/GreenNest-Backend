@@ -80,25 +80,14 @@ export class GardenService {
     return plant;
   }
   async detail(userId: string, id: string): Promise<GardenPlantResponse> {
-    let plant = await this.prisma.gardenPlant.findFirst({
-      where: { id, userId },
-      include: { careEvents: { orderBy: { caredAt: 'desc' } } },
-    });
-    if (!plant)
-      throw new BusinessException(
-        ErrorCode.NOT_FOUND,
-        'Garden plant not found',
-        HttpStatus.NOT_FOUND,
-      );
-    const genericFallback =
-      plant.carePlan ===
-      'Check the top 2-3 cm of soil before watering. Water thoroughly only when it feels dry and ensure drainage.';
+    let plant = await this.ownedPlant(userId, id);
     if (
       !plant.carePlan ||
       !plant.idealSunlight ||
       !plant.placementAdvice ||
       !plant.summerWatering ||
-      genericFallback
+      !plant.normalWatering ||
+      !plant.winterWatering
     ) {
       const plan = await this.carePlans.create({
         name: plant.name,
@@ -125,7 +114,9 @@ export class GardenService {
     return { deleted: true };
   }
   async care(userId: string, id: string, dto: AddCareEventDto): Promise<GardenPlantResponse> {
-    const plant = await this.detail(userId, id);
+    // Care actions must stay fast and reliable even when Gemini is unavailable.
+    // Care-plan generation belongs to plant creation/backfill, never this write path.
+    const plant = await this.ownedPlant(userId, id);
     const nextWateringAt = new Date();
     nextWateringAt.setDate(nextWateringAt.getDate() + plant.wateringDays);
     await this.prisma.$transaction(async (tx) => {
@@ -140,15 +131,15 @@ export class GardenService {
       if (dto.type === CareAction.WATER) {
         await tx.careReminder.updateMany({
           where: { plantId: id, type: CareType.WATER, enabled: true },
-          data: { scheduledAt: nextWateringAt },
+          data: { scheduledAt: nextWateringAt, lastNotifiedAt: null },
         });
       }
     });
     await this.intelligence.recordCareEvent(userId, id, dto.type, dto.note);
-    return this.detail(userId, id);
+    return this.ownedPlant(userId, id);
   }
   async reminders(userId: string, plantId: string): Promise<CareReminder[]> {
-    await this.detail(userId, plantId);
+    await this.ownedPlant(userId, plantId);
     return this.prisma.careReminder.findMany({
       where: { plantId },
       orderBy: { scheduledAt: 'asc' },
@@ -228,7 +219,7 @@ export class GardenService {
     plantId: string,
     dto: CreateReminderDto,
   ): Promise<CareReminder> {
-    await this.detail(userId, plantId);
+    await this.ownedPlant(userId, plantId);
     return this.prisma.careReminder.create({
       data: { plantId, type: dto.type, scheduledAt: new Date(dto.scheduledAt) },
     });
@@ -247,6 +238,24 @@ export class GardenService {
         'Care reminder not found',
         HttpStatus.NOT_FOUND,
       );
-    return this.prisma.careReminder.update({ where: { id: reminderId }, data: { enabled } });
+    return this.prisma.careReminder.update({
+      where: { id: reminderId },
+      data: { enabled, ...(enabled ? { lastNotifiedAt: null } : {}) },
+    });
+  }
+
+  private async ownedPlant(userId: string, id: string): Promise<GardenPlantResponse> {
+    const plant = await this.prisma.gardenPlant.findFirst({
+      where: { id, userId },
+      include: { careEvents: { orderBy: { caredAt: 'desc' } } },
+    });
+    if (!plant) {
+      throw new BusinessException(
+        ErrorCode.NOT_FOUND,
+        'Garden plant not found',
+        HttpStatus.NOT_FOUND,
+      );
+    }
+    return plant;
   }
 }

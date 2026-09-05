@@ -168,6 +168,36 @@ enum AiMemoryType {
   SUCCESSFUL_CARE_PATTERN
 }
 
+enum PushPlatform {
+  ANDROID
+  IOS
+}
+
+enum NotificationAgeGroup {
+  UNSPECIFIED
+  UNDER_18
+  AGE_18_35
+  AGE_36_PLUS
+}
+
+enum NotificationTone {
+  AUTO
+  PLAYFUL
+  CALM
+  MINIMAL
+}
+
+enum SupportConversationStatus {
+  OPEN
+  CLOSED
+}
+
+enum SupportMessageSender {
+  USER
+  SUPPORT
+  SYSTEM
+}
+
 model Category {
   id        String    @id @default(uuid()) @db.Uuid
   name      String    @unique
@@ -299,43 +329,43 @@ model OrderItem {
 }
 
 model GardenPlant {
-  id              String         @id @default(uuid()) @db.Uuid
-  userId          String         @db.Uuid
-  name            String
-  species         String?
-  location        String
-  weatherLocation String?
-  latitude        Float?
-  longitude       Float?
-  notes           String?
-  imageUrl        String?
-  health          Int            @default(100)
-  wateringDays    Int            @default(7)
-  lastWateredAt   DateTime?
-  idealSunlight   String?
-  placementAdvice String?
-  carePlan        String?
-  summerWatering  String?
-  normalWatering  String?
-  winterWatering  String?
-  category        String?
-  source          String?
-  acquiredAt      DateTime?
-  lifecycleStatus PlantLifecycleStatus @default(ACTIVE)
-  statusUpdatedAt DateTime       @default(now())
-  nextWateringAt  DateTime
-  careEvents      CareEvent[]
-  reminders       CareReminder[]
-  events          PlantEvent[]
-  photos          PlantPhoto[]
-  outcomes        PlantOutcomeRecord[]
-  recommendations PlantRecommendation[]
-  memories        AiUserMemory[]
-  aiMessages      AiMessage[]
-  newerRelationships PlantRelationship[] @relation("NewPlantRelationships")
-  historicalRelationships PlantRelationship[] @relation("HistoricalPlantRelationships")
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  id                      String                @id @default(uuid()) @db.Uuid
+  userId                  String                @db.Uuid
+  name                    String
+  species                 String?
+  location                String
+  weatherLocation         String?
+  latitude                Float?
+  longitude               Float?
+  notes                   String?
+  imageUrl                String?
+  health                  Int                   @default(100)
+  wateringDays            Int                   @default(7)
+  lastWateredAt           DateTime?
+  idealSunlight           String?
+  placementAdvice         String?
+  carePlan                String?
+  summerWatering          String?
+  normalWatering          String?
+  winterWatering          String?
+  category                String?
+  source                  String?
+  acquiredAt              DateTime?
+  lifecycleStatus         PlantLifecycleStatus  @default(ACTIVE)
+  statusUpdatedAt         DateTime              @default(now())
+  nextWateringAt          DateTime
+  careEvents              CareEvent[]
+  reminders               CareReminder[]
+  events                  PlantEvent[]
+  photos                  PlantPhoto[]
+  outcomes                PlantOutcomeRecord[]
+  recommendations         PlantRecommendation[]
+  memories                AiUserMemory[]
+  aiMessages              AiMessage[]
+  newerRelationships      PlantRelationship[]   @relation("NewPlantRelationships")
+  historicalRelationships PlantRelationship[]   @relation("HistoricalPlantRelationships")
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
 
   @@index([userId, createdAt])
   @@index([userId, nextWateringAt])
@@ -355,14 +385,15 @@ model CareEvent {
 }
 
 model CareReminder {
-  id          String      @id @default(uuid()) @db.Uuid
-  plantId     String      @db.Uuid
-  type        CareType
-  scheduledAt DateTime
-  enabled     Boolean     @default(true)
-  plant       GardenPlant @relation(fields: [plantId], references: [id], onDelete: Cascade)
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  id             String      @id @default(uuid()) @db.Uuid
+  plantId        String      @db.Uuid
+  type           CareType
+  scheduledAt    DateTime
+  enabled        Boolean     @default(true)
+  lastNotifiedAt DateTime?
+  plant          GardenPlant @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
 
   @@index([plantId, scheduledAt])
   @@index([enabled, scheduledAt])
@@ -521,16 +552,18 @@ model WishlistItem {
 }
 
 model UserSettings {
-  id              String   @id @default(uuid()) @db.Uuid
-  userId          String   @unique @db.Uuid
-  orderUpdates    Boolean  @default(true)
-  gardenerUpdates Boolean  @default(true)
-  careReminders   Boolean  @default(true)
-  offers          Boolean  @default(false)
-  pushEnabled     Boolean  @default(true)
-  emailEnabled    Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id                   String               @id @default(uuid()) @db.Uuid
+  userId               String               @unique @db.Uuid
+  orderUpdates         Boolean              @default(true)
+  gardenerUpdates      Boolean              @default(true)
+  careReminders        Boolean              @default(true)
+  offers               Boolean              @default(false)
+  pushEnabled          Boolean              @default(true)
+  emailEnabled         Boolean              @default(true)
+  notificationAgeGroup NotificationAgeGroup @default(UNSPECIFIED)
+  notificationTone     NotificationTone     @default(AUTO)
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
 }
 
 model Banner {
@@ -560,6 +593,56 @@ model Notification {
 
   @@index([userId, createdAt])
   @@index([userId, readAt])
+}
+
+model PushDevice {
+  id         String       @id @default(uuid()) @db.Uuid
+  userId     String       @db.Uuid
+  token      String       @unique
+  platform   PushPlatform
+  active     Boolean      @default(true)
+  lastSeenAt DateTime     @default(now())
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  @@index([userId, active])
+}
+
+model WeatherAlertDelivery {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String   @db.Uuid
+  locationKey      String
+  eventKey         String   @unique
+  severity         String
+  forecastStartsAt DateTime
+  sentAt           DateTime @default(now())
+
+  @@index([userId, locationKey, sentAt])
+}
+
+model SupportConversation {
+  id            String                    @id @default(uuid()) @db.Uuid
+  userId        String                    @db.Uuid
+  subject       String
+  status        SupportConversationStatus @default(OPEN)
+  lastMessageAt DateTime                  @default(now())
+  messages      SupportMessage[]
+  createdAt     DateTime                  @default(now())
+  updatedAt     DateTime                  @updatedAt
+
+  @@index([userId, status, lastMessageAt])
+}
+
+model SupportMessage {
+  id             String               @id @default(uuid()) @db.Uuid
+  conversationId String               @db.Uuid
+  sender         SupportMessageSender
+  message        String
+  readAt         DateTime?
+  conversation   SupportConversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  createdAt      DateTime             @default(now())
+
+  @@index([conversationId, createdAt])
 }
 
 model AiConversation {
@@ -592,23 +675,23 @@ model AiMessage {
 }
 
 model AiUserMemory {
-  id          String       @id @default(uuid()) @db.Uuid
-  userId      String       @map("user_id") @db.Uuid
-  plantId     String?      @map("plant_id") @db.Uuid
-  scopeKey    String       @default("USER") @map("scope_key")
-  memoryKey   String       @map("memory_key")
-  memoryValue String       @map("memory_value")
-  memoryType  AiMemoryType @map("memory_type")
-  confidence  Decimal      @default(0.9) @db.Decimal(3, 2)
-  source      EvidenceSource @default(USER_STATEMENT)
-  status      MemoryStatus @default(ACTIVE)
-  evidence    Json?
-  reinforcementCount Int   @default(1) @map("reinforcement_count")
-  supersededAt DateTime?    @map("superseded_at")
-  createdAt   DateTime     @default(now()) @map("created_at")
-  updatedAt   DateTime     @updatedAt @map("updated_at")
-  lastUsedAt  DateTime?    @map("last_used_at")
-  plant       GardenPlant? @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  id                 String         @id @default(uuid()) @db.Uuid
+  userId             String         @map("user_id") @db.Uuid
+  plantId            String?        @map("plant_id") @db.Uuid
+  scopeKey           String         @default("USER") @map("scope_key")
+  memoryKey          String         @map("memory_key")
+  memoryValue        String         @map("memory_value")
+  memoryType         AiMemoryType   @map("memory_type")
+  confidence         Decimal        @default(0.9) @db.Decimal(3, 2)
+  source             EvidenceSource @default(USER_STATEMENT)
+  status             MemoryStatus   @default(ACTIVE)
+  evidence           Json?
+  reinforcementCount Int            @default(1) @map("reinforcement_count")
+  supersededAt       DateTime?      @map("superseded_at")
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+  lastUsedAt         DateTime?      @map("last_used_at")
+  plant              GardenPlant?   @relation(fields: [plantId], references: [id], onDelete: Cascade)
 
   @@unique([userId, scopeKey, memoryKey])
   @@index([userId, status, memoryType, updatedAt])
