@@ -48,13 +48,87 @@ export interface PlantIdentificationResult {
   notes: string;
 }
 
+type PlantImagePart = { inlineData: { mimeType: string; data: string } };
+
+const identificationPrompt =
+  'First verify whether this is a direct photo of a real living plant. A plant picture printed on a book, document, poster, package, painting, phone, TV, or computer screen is NOT a real plant. Artificial/plastic plants are also NOT real plants. Classify the image medium before identifying species. Set containsRealPlant=true only when a physical living plant is clearly visible. If false or unclear, use Unknown for name/species, keep species confidence below 0.3, and explain the rejection briefly. For a real plant, return a concise common name, scientific species, suitable placement, and one care note.';
+
+const defaultGeminiIdentificationModels = [
+  'gemini-2.0-flash',
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-3-flash-preview',
+  'gemini-flash-latest',
+];
+
+const defaultOpenAiVisionModels = ['gpt-5.6-luna', 'gpt-5.6-terra'];
+
+function configuredModels(value: string | undefined, defaults: string[]): string[] {
+  const configured = value
+    ?.split(',')
+    .map((model) => model.trim())
+    .filter(Boolean);
+  return configured?.length ? [...new Set(configured)] : defaults;
+}
+
+function normalizePlantIdentification(result: Record<string, unknown>): PlantIdentificationResult {
+  const textValue = (value: unknown, fallback: string): string =>
+    typeof value === 'string' ? value : fallback;
+  const confidenceValue = (value: unknown): number => Math.max(0, Math.min(1, Number(value) || 0));
+  const allowedCategories = new Set<PlantIdentificationResult['imageCategory']>([
+    'LIVE_PLANT',
+    'PLANT_IMAGE_OR_PRINT',
+    'BOOK_OR_DOCUMENT',
+    'POSTER_OR_ARTWORK',
+    'SCREEN',
+    'ARTIFICIAL_PLANT',
+    'OTHER',
+    'UNCLEAR',
+  ]);
+  const requestedCategory = textValue(result.imageCategory, 'UNCLEAR');
+  const imageCategory = allowedCategories.has(
+    requestedCategory as PlantIdentificationResult['imageCategory'],
+  )
+    ? (requestedCategory as PlantIdentificationResult['imageCategory'])
+    : 'UNCLEAR';
+  const classificationConfidence = confidenceValue(result.classificationConfidence);
+  const containsRealPlant =
+    result.containsRealPlant === true &&
+    imageCategory === 'LIVE_PLANT' &&
+    classificationConfidence >= 0.65;
+  const identificationConfidence = confidenceValue(result.confidence);
+  return {
+    containsRealPlant,
+    imageCategory,
+    classificationConfidence,
+    rejectionReason: containsRealPlant
+      ? null
+      : textValue(
+          result.rejectionReason,
+          'This does not appear to be a direct photo of a real living plant.',
+        ).slice(0, 240),
+    name: containsRealPlant
+      ? textValue(result.name, 'Unknown plant').slice(0, 100)
+      : 'Unknown plant',
+    species: containsRealPlant ? textValue(result.species, 'Unknown').slice(0, 140) : 'Unknown',
+    confidence: containsRealPlant
+      ? identificationConfidence
+      : Math.min(0.29, identificationConfidence),
+    suggestedLocation: containsRealPlant
+      ? textValue(result.suggestedLocation, 'Bright indirect light').slice(0, 200)
+      : '',
+    notes: containsRealPlant ? textValue(result.notes, '').slice(0, 500) : '',
+  };
+}
+
 @Injectable()
 export class AiResponseService {
   private readonly logger = new Logger(AiResponseService.name);
 
   async identifyPlant(imageUrl: string): Promise<PlantIdentificationResult> {
     try {
-      return await this.identifyPlantWithGemini(imageUrl);
+      const imagePart = await this.loadImage(imageUrl);
+      return await this.identifyPlantAcrossProviders(imagePart);
     } catch (error) {
       if (error instanceof BusinessException) throw error;
       const message = error instanceof Error ? error.message : 'Unknown error';
@@ -102,11 +176,55 @@ export class AiResponseService {
     }
   }
 
-  private async identifyPlantWithGemini(imageUrl: string): Promise<PlantIdentificationResult> {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) throw new Error('Gemini is not configured');
-    const imagePart = await this.loadImage(imageUrl);
-    const model = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash';
+  private async identifyPlantAcrossProviders(
+    imagePart: PlantImagePart,
+  ): Promise<PlantIdentificationResult> {
+    const geminiKey = process.env.GEMINI_API_KEY;
+    const openAiKey = process.env.OPENAI_API_KEY;
+    if (!geminiKey && !openAiKey) throw new Error('Plant recognition is not configured');
+
+    const failures: string[] = [];
+    if (geminiKey) {
+      const models = configuredModels(
+        process.env.GEMINI_IDENTIFICATION_MODELS,
+        defaultGeminiIdentificationModels,
+      );
+      for (const model of models) {
+        try {
+          return await this.identifyPlantWithGemini(imagePart, model, geminiKey);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'unknown error';
+          failures.push(`Gemini ${model}: ${message}`);
+          this.logger.warn(`Plant identification provider failed: Gemini ${model}: ${message}`);
+        }
+      }
+    }
+
+    if (openAiKey) {
+      const models = configuredModels(process.env.OPENAI_VISION_MODELS, defaultOpenAiVisionModels);
+      for (const model of models) {
+        try {
+          return await this.identifyPlantWithOpenAi(imagePart, model, openAiKey);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'unknown error';
+          failures.push(`OpenAI ${model}: ${message}`);
+          this.logger.warn(`Plant identification provider failed: OpenAI ${model}: ${message}`);
+        }
+      }
+    }
+
+    throw new Error(
+      failures.length
+        ? `All plant recognition providers failed: ${failures.join(' | ')}`
+        : 'Plant recognition is not configured',
+    );
+  }
+
+  private async identifyPlantWithGemini(
+    imagePart: PlantImagePart,
+    model: string,
+    apiKey: string,
+  ): Promise<PlantIdentificationResult> {
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
       {
@@ -117,7 +235,7 @@ export class AiResponseService {
             {
               parts: [
                 {
-                  text: 'First verify whether this is a direct photo of a real living plant. A plant picture printed on a book, document, poster, package, painting, phone, TV, or computer screen is NOT a real plant. Artificial/plastic plants are also NOT real plants. Classify the image medium before identifying species. Set containsRealPlant=true only when a physical living plant is clearly visible. If false or unclear, use Unknown for name/species, keep species confidence below 0.3, and explain the rejection briefly. For a real plant, return a concise common name, scientific species, suitable placement, and one care note.',
+                  text: identificationPrompt,
                 },
                 imagePart,
               ],
@@ -188,54 +306,106 @@ export class AiResponseService {
       .replace(/\s*```$/, '')
       .trim();
     const result = JSON.parse(normalized) as Record<string, unknown>;
-    const textValue = (value: unknown, fallback: string): string =>
-      typeof value === 'string' ? value : fallback;
-    const confidenceValue = (value: unknown): number =>
-      Math.max(0, Math.min(1, Number(value) || 0));
-    const allowedCategories = new Set<PlantIdentificationResult['imageCategory']>([
-      'LIVE_PLANT',
-      'PLANT_IMAGE_OR_PRINT',
-      'BOOK_OR_DOCUMENT',
-      'POSTER_OR_ARTWORK',
-      'SCREEN',
-      'ARTIFICIAL_PLANT',
-      'OTHER',
-      'UNCLEAR',
-    ]);
-    const requestedCategory = textValue(result.imageCategory, 'UNCLEAR');
-    const imageCategory = allowedCategories.has(
-      requestedCategory as PlantIdentificationResult['imageCategory'],
-    )
-      ? (requestedCategory as PlantIdentificationResult['imageCategory'])
-      : 'UNCLEAR';
-    const classificationConfidence = confidenceValue(result.classificationConfidence);
-    const containsRealPlant =
-      result.containsRealPlant === true &&
-      imageCategory === 'LIVE_PLANT' &&
-      classificationConfidence >= 0.65;
-    const identificationConfidence = confidenceValue(result.confidence);
-    return {
-      containsRealPlant,
-      imageCategory,
-      classificationConfidence,
-      rejectionReason: containsRealPlant
-        ? null
-        : textValue(
-            result.rejectionReason,
-            'This does not appear to be a direct photo of a real living plant.',
-          ).slice(0, 240),
-      name: containsRealPlant
-        ? textValue(result.name, 'Unknown plant').slice(0, 100)
-        : 'Unknown plant',
-      species: containsRealPlant ? textValue(result.species, 'Unknown').slice(0, 140) : 'Unknown',
-      confidence: containsRealPlant
-        ? identificationConfidence
-        : Math.min(0.29, identificationConfidence),
-      suggestedLocation: containsRealPlant
-        ? textValue(result.suggestedLocation, 'Bright indirect light').slice(0, 200)
-        : '',
-      notes: containsRealPlant ? textValue(result.notes, '').slice(0, 500) : '',
+    return normalizePlantIdentification(result);
+  }
+
+  private async identifyPlantWithOpenAi(
+    imagePart: PlantImagePart,
+    model: string,
+    apiKey: string,
+  ): Promise<PlantIdentificationResult> {
+    if (
+      !['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(
+        imagePart.inlineData.mimeType,
+      )
+    ) {
+      throw new Error(`Unsupported image type ${imagePart.inlineData.mimeType}`);
+    }
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        input: [
+          {
+            role: 'user',
+            content: [
+              { type: 'input_text', text: identificationPrompt },
+              {
+                type: 'input_image',
+                image_url: `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`,
+                detail: 'high',
+              },
+            ],
+          },
+        ],
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'plant_identification',
+            strict: true,
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              required: [
+                'name',
+                'species',
+                'confidence',
+                'suggestedLocation',
+                'notes',
+                'containsRealPlant',
+                'imageCategory',
+                'classificationConfidence',
+                'rejectionReason',
+              ],
+              properties: {
+                containsRealPlant: { type: 'boolean' },
+                imageCategory: {
+                  type: 'string',
+                  enum: [
+                    'LIVE_PLANT',
+                    'PLANT_IMAGE_OR_PRINT',
+                    'BOOK_OR_DOCUMENT',
+                    'POSTER_OR_ARTWORK',
+                    'SCREEN',
+                    'ARTIFICIAL_PLANT',
+                    'OTHER',
+                    'UNCLEAR',
+                  ],
+                },
+                classificationConfidence: { type: 'number', minimum: 0, maximum: 1 },
+                rejectionReason: { type: ['string', 'null'] },
+                name: { type: 'string' },
+                species: { type: 'string' },
+                confidence: { type: 'number', minimum: 0, maximum: 1 },
+                suggestedLocation: { type: 'string' },
+                notes: { type: 'string' },
+              },
+            },
+          },
+        },
+        max_output_tokens: 600,
+      }),
+      signal: AbortSignal.timeout(35_000),
+    });
+    if (!response.ok) throw new Error(`OpenAI identification failed: HTTP ${response.status}`);
+    const body = (await response.json()) as {
+      output_text?: string;
+      output?: { content?: { type?: string; text?: string }[] }[];
     };
+    const text =
+      body.output_text?.trim() ||
+      body.output
+        ?.flatMap((item) => item.content ?? [])
+        .filter((item) => item.type === 'output_text')
+        .map((item) => item.text ?? '')
+        .join('')
+        .trim();
+    if (!text) throw new Error('OpenAI returned an empty identification response');
+    return normalizePlantIdentification(JSON.parse(text) as Record<string, unknown>);
   }
 
   async generate(
