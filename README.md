@@ -22,7 +22,8 @@ and user-uploaded media support.
 - **Wishlist** — user-owned saved products
 - **Addresses** — create, edit, delete, and select a default delivery/service address
 - **Orders** — checkout records and user order history
-- **Garden** — personal plants, uploaded plant images, health, care events, and reminders
+- **Garden** — durable plant identities, lifecycle state, photo/care timelines, outcomes, reminders, and explainable next-best actions
+- **AI assistant** — Gemini-backed chat with relevant user/plant memory, evidence provenance, same-species history, and feedback
 - **Services** — gardening-service catalog, slots, bookings, gardener assignment, and booking photos
 - **Media** — Supabase `user-photos` bucket with per-user upload/update/delete policies
 
@@ -88,6 +89,7 @@ Prisma migrations cover:
 - Backend-managed app banners
 - Supabase user-photo bucket and RLS policies
 - Service-booking photo attachments
+- Plant intelligence, recommendation lifecycle, evidence-backed memory, outcomes, and relationships
 
 Apply production migrations with:
 

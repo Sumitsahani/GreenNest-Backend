@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/src/main.js",
-    "start:dev": "node --watch -r ts-node/register src/main.ts",
+    "start:dev": "ts-node --project tsconfig.json src/main.ts",
     "lint": "eslint \"{src,test,scripts,packages}/**/*.ts\"",
     "format": "prettier --write \"{src,test,scripts,packages}/**/*.{ts,json}\" \"*.{json,ts,md}\"",
     "test": "jest --runInBand",

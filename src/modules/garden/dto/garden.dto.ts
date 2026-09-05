@@ -19,6 +19,10 @@ export class CreatePlantDto {
   @ApiProperty() @IsString() @MinLength(2) location!: string;
   @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(500) notes?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(1000) imageUrl?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(100) category?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(120) source?: string;
+  @ApiProperty({ required: false, format: 'date-time' }) @IsOptional() @IsDateString() acquiredAt?: string;
+  @ApiProperty({ format: 'date-time' }) @IsDateString() lastWateredAt!: string;
   @ApiProperty({ minimum: 1, maximum: 60, default: 7 })
   @Type(() => Number)
   @IsInt()
