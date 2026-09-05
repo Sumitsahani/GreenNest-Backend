@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import type { CareReminder } from '@prisma/client';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, type AuthenticatedUser } from '../../common/auth/authenticated-user';
@@ -32,6 +32,12 @@ export class GardenController {
     @Param('id') id: string,
   ): Promise<GardenPlantResponse> {
     return this.garden.detail(user.id, id);
+  }
+  @Delete(':id') remove(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<{ deleted: true }> {
+    return this.garden.remove(user.id, id);
   }
   @Post(':id/care-events') care(
     @CurrentUser() user: AuthenticatedUser,

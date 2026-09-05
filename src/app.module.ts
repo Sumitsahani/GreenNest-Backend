@@ -17,6 +17,8 @@ import { GardenModule } from './modules/garden/garden.module';
 import { ServicesModule } from './modules/services/services.module';
 import { AccountModule } from './modules/account/account.module';
 import { RewardsModule } from './modules/rewards/rewards.module';
+import { AiModule } from './modules/ai/ai.module';
+import { IntelligenceModule } from './modules/intelligence/intelligence.module';
 
 @Module({
   imports: [
@@ -47,6 +49,8 @@ import { RewardsModule } from './modules/rewards/rewards.module';
     ServicesModule,
     AccountModule,
     RewardsModule,
+    AiModule,
+    IntelligenceModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

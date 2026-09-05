@@ -1,0 +1,255 @@
+import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { ErrorCode } from '../../common/constants/error-code';
+import { BusinessException } from '../../common/exceptions/business.exception';
+import type { AiContext } from './ai-context.service';
+
+export interface ConversationTurn {
+  role: 'USER' | 'ASSISTANT';
+  content: string;
+}
+
+export interface PlantIdentificationResult {
+  name: string;
+  species: string;
+  confidence: number;
+  suggestedLocation: string;
+  notes: string;
+}
+
+@Injectable()
+export class AiResponseService {
+  private readonly logger = new Logger(AiResponseService.name);
+
+  async identifyPlant(imageUrl: string): Promise<PlantIdentificationResult> {
+    try {
+      return await this.identifyPlantWithGemini(imageUrl);
+    } catch (error) {
+      if (error instanceof BusinessException) throw error;
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      this.logger.warn(`Plant identification failed: ${message}`);
+      if (/not configured/i.test(message)) {
+        throw new BusinessException(
+          ErrorCode.SERVICE_UNAVAILABLE,
+          'Plant recognition is not configured yet.',
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
+      }
+      if (/HTTP (429|500|502|503|504)/i.test(message)) {
+        throw new BusinessException(
+          ErrorCode.SERVICE_UNAVAILABLE,
+          'Plant recognition is busy right now. Please wait a moment and try again.',
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
+      }
+      if (/timeout|abort/i.test(message)) {
+        throw new BusinessException(
+          ErrorCode.SERVICE_UNAVAILABLE,
+          'Plant recognition took too long. Please try again with a clear photo and a stable connection.',
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
+      }
+      if (/too large/i.test(message)) {
+        throw new BusinessException(
+          ErrorCode.AI_ANALYSIS_FAILED,
+          'This photo is too large. Please retake it or choose a photo smaller than 15 MB.',
+          HttpStatus.UNPROCESSABLE_ENTITY,
+        );
+      }
+      if (/image|photo|unsupported|load/i.test(message)) {
+        throw new BusinessException(
+          ErrorCode.AI_ANALYSIS_FAILED,
+          'The uploaded photo could not be read. Please use a clear JPG, PNG, WEBP, HEIC, or HEIF image.',
+          HttpStatus.UNPROCESSABLE_ENTITY,
+        );
+      }
+      throw new BusinessException(
+        ErrorCode.AI_ANALYSIS_FAILED,
+        'I could not recognize this plant. Please try a closer photo in good light.',
+        HttpStatus.BAD_GATEWAY,
+      );
+    }
+  }
+
+  private async identifyPlantWithGemini(
+    imageUrl: string,
+  ): Promise<PlantIdentificationResult> {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error('Gemini is not configured');
+    const imagePart = await this.loadImage(imageUrl);
+    const model = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash';
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                text: 'Identify this plant from the visible image. If the image does not clearly show a plant, return Unknown with confidence below 0.3. Use a concise common name, scientific species, suitable placement, and one care note.',
+              },
+              imagePart,
+            ],
+          },
+        ],
+        generationConfig: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: 'OBJECT',
+            required: [
+              'name',
+              'species',
+              'confidence',
+              'suggestedLocation',
+              'notes',
+            ],
+            properties: {
+              name: { type: 'STRING' },
+              species: { type: 'STRING' },
+              confidence: { type: 'NUMBER', minimum: 0, maximum: 1 },
+              suggestedLocation: { type: 'STRING' },
+              notes: { type: 'STRING' },
+            },
+          },
+          thinkingConfig: { thinkingBudget: 0 },
+          temperature: 0.1,
+          maxOutputTokens: 600,
+        },
+      }),
+      signal: AbortSignal.timeout(35_000),
+    });
+    if (!response.ok) throw new Error(`Gemini identification failed: HTTP ${response.status}`);
+    const body = (await response.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+    const text = body.candidates?.[0]?.content?.parts
+      ?.map((part) => part.text ?? '')
+      .join('')
+      .trim();
+    if (!text) throw new Error('Empty identification response');
+    const normalized = text
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/, '')
+      .trim();
+    const result = JSON.parse(normalized) as Record<string, unknown>;
+    const textValue = (value: unknown, fallback: string): string =>
+      typeof value === 'string' ? value : fallback;
+    return {
+      name: textValue(result.name, 'Unknown plant').slice(0, 100),
+      species: textValue(result.species, 'Unknown').slice(0, 140),
+      confidence: Math.max(0, Math.min(1, Number(result.confidence) || 0)),
+      suggestedLocation: textValue(result.suggestedLocation, 'Bright indirect light').slice(0, 200),
+      notes: textValue(result.notes, '').slice(0, 500),
+    };
+  }
+
+  async generate(
+    question: string,
+    context: AiContext,
+    imageUrl?: string,
+    history: ConversationTurn[] = [],
+  ): Promise<string> {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (apiKey) {
+      try {
+        return await this.generateWithGemini(apiKey, question, context, imageUrl, history);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'unknown error';
+        this.logger.warn(`Gemini request failed; using local fallback: ${message}`);
+      }
+    }
+    return this.generateFallback(question, context);
+  }
+
+  private async generateWithGemini(
+    apiKey: string,
+    question: string,
+    context: AiContext,
+    imageUrl?: string,
+    history: ConversationTurn[] = [],
+  ): Promise<string> {
+    const model = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash';
+    const imagePart = imageUrl ? await this.loadImage(imageUrl) : undefined;
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+        body: JSON.stringify({
+          systemInstruction: {
+            parts: [{
+              text: 'You are GreenNest Plant Intelligence, a concise and practical gardening assistant. Match the user in Hindi, Hinglish, or English. Use current verified plant data and current plant history before generic knowledge. Direct user statements and corrections outrank AI inference. Historical outcomes and repeated user patterns are supporting evidence only and must never override conflicting current evidence. Never invent plant history, preferences, events, causes, or sources. Distinguish user-reported causes from AI inferences and never present uncertainty as fact. Explain advice using only supplied signals. If evidence is insufficient, state what is unknown. Never claim that the model was retrained. For photos, describe visible symptoms, offer possible causes with uncertainty, practical next steps, and ask for missing details. Include safety warnings for pesticides, toxic plants, or consumption.',
+            }],
+          },
+          contents: [
+            ...history.map((turn) => ({
+              role: turn.role === 'ASSISTANT' ? 'model' : 'user',
+              parts: [{ text: turn.content }],
+            })),
+            {
+              role: 'user',
+              parts: [
+                { text: `${context.promptContext}\n\nCURRENT QUESTION:\n${question}` },
+                ...(imagePart ? [imagePart] : []),
+              ],
+            },
+          ],
+          generationConfig: { temperature: 0.4, maxOutputTokens: 700 },
+        }),
+        signal: AbortSignal.timeout(15_000),
+      },
+    );
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = (await response.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const text = payload.candidates?.[0]?.content?.parts
+      ?.map((part) => part.text ?? '')
+      .join('')
+      .trim();
+    if (!text) throw new Error('Gemini returned an empty response');
+    return text;
+  }
+
+  private async loadImage(imageUrl: string): Promise<{ inlineData: { mimeType: string; data: string } }> {
+    const url = new URL(imageUrl);
+    const supabaseHost = new URL(process.env.SUPABASE_URL ?? '').hostname;
+    if (url.protocol !== 'https:' || url.hostname !== supabaseHost || !url.pathname.includes('/storage/v1/object/public/user-photos/')) {
+      throw new Error('Unsupported image URL');
+    }
+    const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) throw new Error(`Unable to load image: HTTP ${response.status}`);
+    const responseMimeType = response.headers.get('content-type')?.split(';')[0];
+    const extension = url.pathname.split('.').pop()?.toLowerCase();
+    const mimeByExtension: Record<string, string> = {
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      png: 'image/png',
+      webp: 'image/webp',
+      heic: 'image/heic',
+      heif: 'image/heif',
+    };
+    const mimeType =
+      responseMimeType?.startsWith('image/')
+        ? responseMimeType
+        : mimeByExtension[extension ?? ''] ?? 'image/jpeg';
+    if (!['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'].includes(mimeType)) throw new Error('Unsupported image type');
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.byteLength > 15 * 1024 * 1024) throw new Error('Image is too large');
+    return { inlineData: { mimeType, data: bytes.toString('base64') } };
+  }
+
+  private generateFallback(question: string, context: AiContext): string {
+    const lower = question.toLowerCase();
+    const facts = new Map(context.memories.map((item) => [item.memoryKey, item.memoryValue]));
+    const personalization = [facts.get('gardening_experience'), facts.get('growing_space')]
+      .filter(Boolean)
+      .join(', ');
+    if (/water|watering/.test(lower) && context.garden.length) {
+      const next = [...context.garden].sort(
+        (a, b) => a.nextWateringAt.getTime() - b.nextWateringAt.getTime(),
+      )[0];
+      if (next) return `${next.name} is your next scheduled plant to check for watering on ${next.nextWateringAt.toISOString().slice(0, 10)}. Check the top 2-3 cm of soil first; water only if it feels dry.`;
+    }
+    const known = context.garden.length
+      ? `I can use your ${context.garden.length} saved garden plants`
+      : 'I do not have a saved garden plant yet';
+    return `${known}${personalization ? ` and your saved context (${personalization})` : ''}. For "${question.trim()}", share the plant name and light/soil condition for a precise answer.`;
+  }
+}

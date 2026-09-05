@@ -25,6 +25,118 @@ enum CareType {
   NOTE
 }
 
+enum PlantLifecycleStatus {
+  ACTIVE
+  MOVED
+  GIFTED
+  SOLD
+  DIED
+  REMOVED
+  ARCHIVED
+}
+
+enum PlantEventType {
+  CREATED
+  IDENTIFIED
+  WATERED
+  WATERING_SKIPPED
+  FERTILIZED
+  REPOTTED
+  MOVED
+  PHOTO_UPLOADED
+  HEALTH_ISSUE
+  SYMPTOM_REPORTED
+  TREATMENT_APPLIED
+  USER_NOTE
+  RECOMMENDATION_GENERATED
+  RECOMMENDATION_SHOWN
+  RECOMMENDATION_ACCEPTED
+  RECOMMENDATION_REJECTED
+  RECOMMENDATION_SKIPPED
+  RECOMMENDATION_DISMISSED
+  RECOMMENDATION_COMPLETED
+  OUTCOME_RECORDED
+}
+
+enum PlantOutcomeType {
+  HEALTHY
+  IMPROVED
+  DECLINED
+  DIED
+  GIFTED
+  REMOVED
+  UNKNOWN
+}
+
+enum EvidenceSource {
+  USER_STATEMENT
+  USER_CORRECTION
+  USER_ACTION
+  SYSTEM_EVENT
+  PLANT_ANALYSIS
+  AI_INFERENCE
+}
+
+enum MemoryStatus {
+  ACTIVE
+  SUPERSEDED
+  ARCHIVED
+}
+
+enum RecommendationAction {
+  WATER
+  SKIP_WATERING
+  INSPECT
+  MOVE_TO_LIGHT
+  MOVE_TO_SHADE
+  FERTILIZE
+  REPOT
+  TREAT
+  MONITOR
+  NO_ACTION
+}
+
+enum RecommendationPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum RecommendationStatus {
+  GENERATED
+  SHOWN
+  ACCEPTED
+  REJECTED
+  SKIPPED
+  DISMISSED
+  COMPLETED
+}
+
+enum RecommendationOutcome {
+  POSITIVE
+  NEUTRAL
+  NEGATIVE
+  UNKNOWN
+}
+
+enum PlantRelationshipType {
+  SAME_SPECIES
+  SIMILAR_SPECIES
+  SAME_PROBLEM_HISTORY
+  SIMILAR_ENVIRONMENT
+  USER_PATTERN
+}
+
+enum AiFeedbackReason {
+  WRONG_PLANT
+  WRONG_ADVICE
+  OUTDATED_INFORMATION
+  NOT_RELEVANT
+  ALREADY_FIXED
+  OTHER
+}
+
 enum BookingStatus {
   CONFIRMED
   GARDENER_ASSIGNED
@@ -32,6 +144,28 @@ enum BookingStatus {
   IN_PROGRESS
   COMPLETED
   CANCELLED
+}
+
+enum AiMessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum AiMemoryType {
+  PREFERENCE
+  ENVIRONMENT
+  GOAL
+  EXPERIENCE
+  GARDEN_PREFERENCE
+  PLANT_PREFERENCE
+  SHOPPING_PREFERENCE
+  CARE_PREFERENCE
+  PLANT_OBSERVATION
+  USER_PATTERN
+  USER_CORRECTION
+  PLANT_OUTCOME
+  SUCCESSFUL_CARE_PATTERN
 }
 
 model Category {
@@ -165,23 +299,45 @@ model OrderItem {
 }
 
 model GardenPlant {
-  id             String         @id @default(uuid()) @db.Uuid
-  userId         String         @db.Uuid
-  name           String
-  species        String?
-  location       String
-  notes          String?
-  imageUrl       String?
-  health         Int            @default(100)
-  wateringDays   Int            @default(7)
-  nextWateringAt DateTime
-  careEvents     CareEvent[]
-  reminders      CareReminder[]
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  id              String         @id @default(uuid()) @db.Uuid
+  userId          String         @db.Uuid
+  name            String
+  species         String?
+  location        String
+  notes           String?
+  imageUrl        String?
+  health          Int            @default(100)
+  wateringDays    Int            @default(7)
+  lastWateredAt   DateTime?
+  idealSunlight   String?
+  placementAdvice String?
+  carePlan        String?
+  summerWatering  String?
+  normalWatering  String?
+  winterWatering  String?
+  category        String?
+  source          String?
+  acquiredAt      DateTime?
+  lifecycleStatus PlantLifecycleStatus @default(ACTIVE)
+  statusUpdatedAt DateTime       @default(now())
+  nextWateringAt  DateTime
+  careEvents      CareEvent[]
+  reminders       CareReminder[]
+  events          PlantEvent[]
+  photos          PlantPhoto[]
+  outcomes        PlantOutcomeRecord[]
+  recommendations PlantRecommendation[]
+  memories        AiUserMemory[]
+  aiMessages      AiMessage[]
+  newerRelationships PlantRelationship[] @relation("NewPlantRelationships")
+  historicalRelationships PlantRelationship[] @relation("HistoricalPlantRelationships")
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 
   @@index([userId, createdAt])
   @@index([userId, nextWateringAt])
+  @@index([userId, lifecycleStatus, updatedAt])
+  @@index([userId, species, lifecycleStatus])
 }
 
 model CareEvent {
@@ -207,6 +363,95 @@ model CareReminder {
 
   @@index([plantId, scheduledAt])
   @@index([enabled, scheduledAt])
+}
+
+model PlantEvent {
+  id         String         @id @default(uuid()) @db.Uuid
+  plantId    String         @db.Uuid
+  userId     String         @db.Uuid
+  type       PlantEventType
+  eventKey   String?
+  value      Json?
+  note       String?
+  source     EvidenceSource @default(SYSTEM_EVENT)
+  confidence Decimal        @default(1) @db.Decimal(3, 2)
+  occurredAt DateTime       @default(now())
+  createdAt  DateTime       @default(now())
+  plant      GardenPlant    @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  @@index([userId, occurredAt])
+  @@index([plantId, occurredAt])
+  @@index([plantId, type, occurredAt])
+}
+
+model PlantPhoto {
+  id        String         @id @default(uuid()) @db.Uuid
+  plantId   String         @db.Uuid
+  userId    String         @db.Uuid
+  url       String
+  analysis  Json?
+  source    EvidenceSource @default(USER_ACTION)
+  createdAt DateTime       @default(now())
+  plant     GardenPlant    @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([plantId, createdAt])
+}
+
+model PlantOutcomeRecord {
+  id         String           @id @default(uuid()) @db.Uuid
+  plantId    String           @db.Uuid
+  userId     String           @db.Uuid
+  outcome    PlantOutcomeType
+  reason     String?
+  confidence Decimal          @default(1) @db.Decimal(3, 2)
+  source     EvidenceSource
+  recordedAt DateTime         @default(now())
+  plant      GardenPlant      @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  @@index([userId, outcome, recordedAt])
+  @@index([plantId, recordedAt])
+}
+
+model PlantRecommendation {
+  id                 String                 @id @default(uuid()) @db.Uuid
+  plantId            String                 @db.Uuid
+  userId             String                 @db.Uuid
+  action             RecommendationAction
+  priority           RecommendationPriority
+  confidence         Decimal                @db.Decimal(3, 2)
+  reason             String
+  signals            String[]
+  status             RecommendationStatus   @default(GENERATED)
+  shownAt            DateTime?
+  respondedAt        DateTime?
+  completedAt        DateTime?
+  userResponseReason String?
+  outcome            RecommendationOutcome?
+  outcomeNote        String?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+  plant              GardenPlant            @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status, createdAt])
+  @@index([plantId, status, createdAt])
+}
+
+model PlantRelationship {
+  id              String                @id @default(uuid()) @db.Uuid
+  userId          String                @db.Uuid
+  newPlantId      String                @db.Uuid
+  previousPlantId String                @db.Uuid
+  type            PlantRelationshipType
+  reason          String
+  confidence      Decimal               @db.Decimal(3, 2)
+  createdAt       DateTime              @default(now())
+  newPlant        GardenPlant           @relation("NewPlantRelationships", fields: [newPlantId], references: [id], onDelete: Cascade)
+  previousPlant   GardenPlant           @relation("HistoricalPlantRelationships", fields: [previousPlantId], references: [id], onDelete: Cascade)
+
+  @@unique([newPlantId, previousPlantId, type])
+  @@index([userId, newPlantId])
+  @@index([userId, previousPlantId])
 }
 
 model GardeningService {
@@ -273,30 +518,31 @@ model WishlistItem {
 }
 
 model UserSettings {
-  id               String   @id @default(uuid()) @db.Uuid
-  userId           String   @unique @db.Uuid
-  orderUpdates     Boolean  @default(true)
-  gardenerUpdates  Boolean  @default(true)
-  careReminders    Boolean  @default(true)
-  offers            Boolean  @default(false)
-  pushEnabled       Boolean  @default(true)
-  emailEnabled      Boolean  @default(true)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  id              String   @id @default(uuid()) @db.Uuid
+  userId          String   @unique @db.Uuid
+  orderUpdates    Boolean  @default(true)
+  gardenerUpdates Boolean  @default(true)
+  careReminders   Boolean  @default(true)
+  offers          Boolean  @default(false)
+  pushEnabled     Boolean  @default(true)
+  emailEnabled    Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }
 
 model Banner {
-  id String @id @default(uuid()) @db.Uuid
-  slug String @unique
+  id        String   @id @default(uuid()) @db.Uuid
+  slug      String   @unique
   placement String
-  eyebrow String?
-  title String
-  imageUrl String
-  route String?
-  active Boolean @default(true)
-  sortOrder Int @default(0)
+  eyebrow   String?
+  title     String
+  imageUrl  String
+  route     String?
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
   @@index([placement, active, sortOrder])
 }
 
@@ -311,4 +557,74 @@ model Notification {
 
   @@index([userId, createdAt])
   @@index([userId, readAt])
+}
+
+model AiConversation {
+  id        String      @id @default(uuid()) @db.Uuid
+  userId    String      @map("user_id") @db.Uuid
+  title     String?
+  messages  AiMessage[]
+  createdAt DateTime    @default(now()) @map("created_at")
+  updatedAt DateTime    @updatedAt @map("updated_at")
+
+  @@index([userId, updatedAt])
+  @@map("ai_conversations")
+}
+
+model AiMessage {
+  id             String         @id @default(uuid()) @db.Uuid
+  conversationId String         @map("conversation_id") @db.Uuid
+  role           AiMessageRole
+  content        String
+  plantId        String?        @map("plant_id") @db.Uuid
+  intent         String?
+  sourcesUsed    String[]       @default([]) @map("sources_used")
+  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  plant          GardenPlant?   @relation(fields: [plantId], references: [id], onDelete: SetNull)
+  feedback       AiFeedback[]
+  createdAt      DateTime       @default(now()) @map("created_at")
+
+  @@index([conversationId, createdAt])
+  @@map("ai_messages")
+}
+
+model AiUserMemory {
+  id          String       @id @default(uuid()) @db.Uuid
+  userId      String       @map("user_id") @db.Uuid
+  plantId     String?      @map("plant_id") @db.Uuid
+  scopeKey    String       @default("USER") @map("scope_key")
+  memoryKey   String       @map("memory_key")
+  memoryValue String       @map("memory_value")
+  memoryType  AiMemoryType @map("memory_type")
+  confidence  Decimal      @default(0.9) @db.Decimal(3, 2)
+  source      EvidenceSource @default(USER_STATEMENT)
+  status      MemoryStatus @default(ACTIVE)
+  evidence    Json?
+  reinforcementCount Int   @default(1) @map("reinforcement_count")
+  supersededAt DateTime?    @map("superseded_at")
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+  lastUsedAt  DateTime?    @map("last_used_at")
+  plant       GardenPlant? @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, scopeKey, memoryKey])
+  @@index([userId, status, memoryType, updatedAt])
+  @@index([plantId, status, updatedAt])
+  @@index([userId, lastUsedAt])
+  @@map("ai_user_memories")
+}
+
+model AiFeedback {
+  id        String            @id @default(uuid()) @db.Uuid
+  userId    String            @map("user_id") @db.Uuid
+  messageId String?           @map("message_id") @db.Uuid
+  helpful   Boolean
+  reason    AiFeedbackReason?
+  note      String?
+  createdAt DateTime          @default(now()) @map("created_at")
+  message   AiMessage?        @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([messageId])
+  @@map("ai_feedback")
 }
