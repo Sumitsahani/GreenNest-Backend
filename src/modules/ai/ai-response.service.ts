@@ -9,6 +9,18 @@ export interface ConversationTurn {
 }
 
 export interface PlantIdentificationResult {
+  containsRealPlant: boolean;
+  imageCategory:
+    | 'LIVE_PLANT'
+    | 'PLANT_IMAGE_OR_PRINT'
+    | 'BOOK_OR_DOCUMENT'
+    | 'POSTER_OR_ARTWORK'
+    | 'SCREEN'
+    | 'ARTIFICIAL_PLANT'
+    | 'OTHER'
+    | 'UNCLEAR';
+  classificationConfidence: number;
+  rejectionReason: string | null;
   name: string;
   species: string;
   confidence: number;
@@ -84,7 +96,7 @@ export class AiResponseService {
           {
             parts: [
               {
-                text: 'Identify this plant from the visible image. If the image does not clearly show a plant, return Unknown with confidence below 0.3. Use a concise common name, scientific species, suitable placement, and one care note.',
+                text: 'First verify whether this is a direct photo of a real living plant. A plant picture printed on a book, document, poster, package, painting, phone, TV, or computer screen is NOT a real plant. Artificial/plastic plants are also NOT real plants. Classify the image medium before identifying species. Set containsRealPlant=true only when a physical living plant is clearly visible. If false or unclear, use Unknown for name/species, keep species confidence below 0.3, and explain the rejection briefly. For a real plant, return a concise common name, scientific species, suitable placement, and one care note.',
               },
               imagePart,
             ],
@@ -100,8 +112,32 @@ export class AiResponseService {
               'confidence',
               'suggestedLocation',
               'notes',
+              'containsRealPlant',
+              'imageCategory',
+              'classificationConfidence',
+              'rejectionReason',
             ],
             properties: {
+              containsRealPlant: { type: 'BOOLEAN' },
+              imageCategory: {
+                type: 'STRING',
+                enum: [
+                  'LIVE_PLANT',
+                  'PLANT_IMAGE_OR_PRINT',
+                  'BOOK_OR_DOCUMENT',
+                  'POSTER_OR_ARTWORK',
+                  'SCREEN',
+                  'ARTIFICIAL_PLANT',
+                  'OTHER',
+                  'UNCLEAR',
+                ],
+              },
+              classificationConfidence: {
+                type: 'NUMBER',
+                minimum: 0,
+                maximum: 1,
+              },
+              rejectionReason: { type: 'STRING' },
               name: { type: 'STRING' },
               species: { type: 'STRING' },
               confidence: { type: 'NUMBER', minimum: 0, maximum: 1 },
@@ -130,12 +166,60 @@ export class AiResponseService {
     const result = JSON.parse(normalized) as Record<string, unknown>;
     const textValue = (value: unknown, fallback: string): string =>
       typeof value === 'string' ? value : fallback;
+    const confidenceValue = (value: unknown): number =>
+      Math.max(0, Math.min(1, Number(value) || 0));
+    const allowedCategories = new Set<PlantIdentificationResult['imageCategory']>([
+      'LIVE_PLANT',
+      'PLANT_IMAGE_OR_PRINT',
+      'BOOK_OR_DOCUMENT',
+      'POSTER_OR_ARTWORK',
+      'SCREEN',
+      'ARTIFICIAL_PLANT',
+      'OTHER',
+      'UNCLEAR',
+    ]);
+    const requestedCategory = textValue(result.imageCategory, 'UNCLEAR');
+    const imageCategory = allowedCategories.has(
+      requestedCategory as PlantIdentificationResult['imageCategory'],
+    )
+      ? (requestedCategory as PlantIdentificationResult['imageCategory'])
+      : 'UNCLEAR';
+    const classificationConfidence = confidenceValue(
+      result.classificationConfidence,
+    );
+    const containsRealPlant =
+      result.containsRealPlant === true &&
+      imageCategory === 'LIVE_PLANT' &&
+      classificationConfidence >= 0.65;
+    const identificationConfidence = confidenceValue(result.confidence);
     return {
-      name: textValue(result.name, 'Unknown plant').slice(0, 100),
-      species: textValue(result.species, 'Unknown').slice(0, 140),
-      confidence: Math.max(0, Math.min(1, Number(result.confidence) || 0)),
-      suggestedLocation: textValue(result.suggestedLocation, 'Bright indirect light').slice(0, 200),
-      notes: textValue(result.notes, '').slice(0, 500),
+      containsRealPlant,
+      imageCategory,
+      classificationConfidence,
+      rejectionReason: containsRealPlant
+        ? null
+        : textValue(
+            result.rejectionReason,
+            'This does not appear to be a direct photo of a real living plant.',
+          ).slice(0, 240),
+      name: containsRealPlant
+        ? textValue(result.name, 'Unknown plant').slice(0, 100)
+        : 'Unknown plant',
+      species: containsRealPlant
+        ? textValue(result.species, 'Unknown').slice(0, 140)
+        : 'Unknown',
+      confidence: containsRealPlant
+        ? identificationConfidence
+        : Math.min(0.29, identificationConfidence),
+      suggestedLocation: containsRealPlant
+        ? textValue(result.suggestedLocation, 'Bright indirect light').slice(
+            0,
+            200,
+          )
+        : '',
+      notes: containsRealPlant
+        ? textValue(result.notes, '').slice(0, 500)
+        : '',
     };
   }
 
