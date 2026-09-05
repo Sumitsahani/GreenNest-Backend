@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: greennest-api
+    runtime: node
+    region: singapore
+    plan: free
+    autoDeployTrigger: commit
+    buildCommand: npm ci && npm run prisma:generate && npm run build
+    startCommand: npm run prisma:migrate:deploy && npm start
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_CONNECT_ON_STARTUP
+        value: true
+      - key: THROTTLE_TTL_MS
+        value: 60000
+      - key: THROTTLE_LIMIT
+        value: 100
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: WEB_APP_ORIGIN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: SUPPORT_API_KEY
+        generateValue: true
