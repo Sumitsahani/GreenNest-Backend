@@ -6,7 +6,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "start": "node dist/src/main.js",
+    "start": "node dist/main.js",
     "start:dev": "ts-node --project tsconfig.json src/main.ts",
     "lint": "eslint \"{src,test,scripts,packages}/**/*.ts\"",
     "format": "prettier --write \"{src,test,scripts,packages}/**/*.{ts,json}\" \"*.{json,ts,md}\"",
