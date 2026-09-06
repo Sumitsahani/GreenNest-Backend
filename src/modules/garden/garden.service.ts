@@ -51,6 +51,7 @@ export class GardenService {
         name: dto.name,
         species: dto.species,
         location: dto.location,
+        environment: dto.environment,
         weatherLocation: weatherLocation?.label ?? dto.weatherLocation,
         latitude: weatherLocation?.latitude,
         longitude: weatherLocation?.longitude,
@@ -93,6 +94,7 @@ export class GardenService {
         name: plant.name,
         species: plant.species ?? undefined,
         location: plant.location,
+        environment: plant.environment,
         notes: plant.notes ?? undefined,
       });
       const lastWateredAt = plant.lastWateredAt ?? plant.createdAt;
@@ -114,18 +116,73 @@ export class GardenService {
     return { deleted: true };
   }
   async care(userId: string, id: string, dto: AddCareEventDto): Promise<GardenPlantResponse> {
+    return this.recordCareAt(userId, id, dto, new Date());
+  }
+
+  async recordWateringAt(
+    userId: string,
+    id: string,
+    caredAt: Date,
+    note?: string,
+  ): Promise<GardenPlantResponse> {
+    return this.recordCareAt(userId, id, { type: CareAction.WATER, note }, caredAt);
+  }
+
+  async rescheduleWatering(
+    userId: string,
+    id: string,
+    scheduledAt: Date,
+    note?: string,
+  ): Promise<GardenPlantResponse> {
+    await this.ownedPlant(userId, id);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.gardenPlant.update({
+        where: { id },
+        data: { nextWateringAt: scheduledAt },
+      });
+      const updated = await tx.careReminder.updateMany({
+        where: { plantId: id, type: CareType.WATER, enabled: true },
+        data: { scheduledAt, lastNotifiedAt: null },
+      });
+      if (!updated.count) {
+        await tx.careReminder.create({
+          data: { plantId: id, type: CareType.WATER, scheduledAt },
+        });
+      }
+    });
+    await this.intelligence.recordCareEvent(
+      userId,
+      id,
+      CareAction.NOTE,
+      note ?? `Next watering rescheduled to ${scheduledAt.toISOString()}`,
+    );
+    return this.ownedPlant(userId, id);
+  }
+
+  private async recordCareAt(
+    userId: string,
+    id: string,
+    dto: AddCareEventDto,
+    caredAt: Date,
+  ): Promise<GardenPlantResponse> {
     // Care actions must stay fast and reliable even when Gemini is unavailable.
     // Care-plan generation belongs to plant creation/backfill, never this write path.
     const plant = await this.ownedPlant(userId, id);
-    const nextWateringAt = new Date();
+    const nextWateringAt = new Date(caredAt);
     nextWateringAt.setDate(nextWateringAt.getDate() + plant.wateringDays);
     await this.prisma.$transaction(async (tx) => {
-      await tx.careEvent.create({ data: { plantId: id, type: dto.type, note: dto.note } });
+      await tx.careEvent.create({
+        data: { plantId: id, type: dto.type, note: dto.note, caredAt },
+      });
       await tx.gardenPlant.update({
         where: { id },
         data:
           dto.type === CareAction.WATER
-            ? { nextWateringAt, lastWateredAt: new Date(), health: Math.min(100, plant.health + 3) }
+            ? {
+                nextWateringAt,
+                lastWateredAt: caredAt,
+                health: Math.min(100, plant.health + 3),
+              }
             : {},
       });
       if (dto.type === CareAction.WATER) {
@@ -168,6 +225,7 @@ export class GardenService {
           id: plant.id,
           name: plant.name,
           location: plant.location,
+          environment: plant.environment,
           weatherLocation: plant.weatherLocation,
           latitude: plant.latitude,
           longitude: plant.longitude,
@@ -205,6 +263,7 @@ export class GardenService {
       id: plant.id,
       name: plant.name,
       location: plant.location,
+      environment: plant.environment,
       weatherLocation: plant.weatherLocation,
       latitude: plant.latitude,
       longitude: plant.longitude,

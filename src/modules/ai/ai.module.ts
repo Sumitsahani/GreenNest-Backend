@@ -8,11 +8,22 @@ import { AiService } from './ai.service';
 import { MemoryExtractorService } from './memory-extractor.service';
 import { IntelligenceModule } from '../intelligence/intelligence.module';
 import { QuestionUnderstandingService } from './question-understanding.service';
+import { AiCareActionService } from './ai-care-action.service';
+import { GardenModule } from '../garden/garden.module';
 
 @Module({
-  imports: [IntelligenceModule],
+  imports: [IntelligenceModule, GardenModule],
   controllers: [AiController],
-  providers: [AiService, AiMemoryService, MemoryExtractorService, AiContextService, AiResponseService, QuestionUnderstandingService, SupabaseAuthGuard],
+  providers: [
+    AiService,
+    AiMemoryService,
+    MemoryExtractorService,
+    AiContextService,
+    AiResponseService,
+    QuestionUnderstandingService,
+    AiCareActionService,
+    SupabaseAuthGuard,
+  ],
   exports: [AiService, AiMemoryService],
 })
 export class AiModule {}

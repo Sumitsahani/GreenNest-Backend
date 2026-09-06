@@ -10,6 +10,6 @@ import { WeatherCareService } from './weather-care.service';
   imports: [IntelligenceModule],
   controllers: [GardenController],
   providers: [GardenService, GardenCarePlanService, WeatherCareService, SupabaseAuthGuard],
-  exports: [WeatherCareService],
+  exports: [GardenService, WeatherCareService],
 })
 export class GardenModule {}

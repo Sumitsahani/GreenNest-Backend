@@ -28,6 +28,43 @@ function languageInstruction(language: ResponseLanguage): string {
   return 'Reply only in natural English. Do not switch to Hindi or Hinglish.';
 }
 
+function friendlySmallTalk(question: string, language: ResponseLanguage): string | null {
+  const text = question
+    .toLowerCase()
+    .replace(/[^a-z\u0900-\u097f\s']/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const greeting =
+    /^(?:hi+|hello+|hey+|hii+|namaste|good morning|good evening|how are you|how r u|what'?s up|kaise ho|kya haal hai)(?:\s+(?:how are you|how r u|kaise ho|kya haal hai))*$/.test(
+      text,
+    );
+  const thanks = /^(?:thanks|thank you|thx|shukriya|dhanyavaad)$/.test(text);
+  const farewell = /^(?:bye|goodbye|good night|see you|milte hain)$/.test(text);
+  const doingWell =
+    /^(?:i am|i'm|im|main)\s+(?:fine|good|great|okay|ok|theek|badhiya)(?:\s+(?:hoon|hu))?$/.test(
+      text,
+    );
+
+  if (!greeting && !thanks && !farewell && !doingWell) return null;
+
+  if (language === 'HINDI') {
+    if (thanks) return 'हमेशा खुशी से! जब चाहें मुझसे बात करें।';
+    if (farewell) return 'फिर मिलेंगे! अपना और अपने पौधों का खयाल रखना।';
+    if (doingWell) return 'यह सुनकर अच्छा लगा! मैं यहीं हूँ - बताओ आज क्या बात करें?';
+    return 'नमस्ते! मैं बहुत अच्छा हूँ, पूछने के लिए धन्यवाद। मैं तुम्हारा Plant Buddy हूँ - तुम कैसे हो?';
+  }
+  if (language === 'HINGLISH') {
+    if (thanks) return 'Anytime yaar! Jab mann ho, message kar dena.';
+    if (farewell) return 'Phir milte hain! Apna aur apne plants ka khayal rakhna.';
+    if (doingWell) return 'Yeh sunkar achha laga! Main yahin hoon - batao aaj kya baat karein?';
+    return 'Hey! Main bilkul badhiya hoon, poochhne ke liye thanks. Main tumhara Plant Buddy hoon - tum kaise ho?';
+  }
+  if (thanks) return "Anytime! I'm always happy to help or just chat.";
+  if (farewell) return 'See you soon! Take care of yourself and your green friends.';
+  if (doingWell) return "Glad to hear that! I'm right here - what would you like to chat about?";
+  return "Hey! I'm doing great, thanks for asking. I'm your Plant Buddy - how are you doing?";
+}
+
 export interface PlantIdentificationResult {
   containsRealPlant: boolean;
   imageCategory:
@@ -46,12 +83,16 @@ export interface PlantIdentificationResult {
   confidence: number;
   suggestedLocation: string;
   notes: string;
+  recommendedEnvironment: 'INDOOR' | 'OUTDOOR';
+  environmentReason: string;
+  indoorRisks: string;
+  indoorAdaptationAdvice: string;
 }
 
 type PlantImagePart = { inlineData: { mimeType: string; data: string } };
 
 const identificationPrompt =
-  'First verify whether this is a direct photo of a real living plant. A plant picture printed on a book, document, poster, package, painting, phone, TV, or computer screen is NOT a real plant. Artificial/plastic plants are also NOT real plants. Classify the image medium before identifying species. Set containsRealPlant=true only when a physical living plant is clearly visible. If false or unclear, use Unknown for name/species, keep species confidence below 0.3, and explain the rejection briefly. For a real plant, return a concise common name, scientific species, suitable placement, and one care note.';
+  'First verify whether this is a direct photo of a real living plant. A plant picture printed on a book, document, poster, package, painting, phone, TV, or computer screen is NOT a real plant. Artificial/plastic plants are also NOT real plants. Classify the image medium before identifying species. Set containsRealPlant=true only when a physical living plant is clearly visible. If false or unclear, use Unknown for name/species, keep species confidence below 0.3, and explain the rejection briefly. For a real plant, return a concise common name, scientific species, suitable placement, one care note, whether INDOOR or OUTDOOR is normally recommended, why, realistic risks if kept indoors, and practical steps that can help it adapt indoors. Keep advice concise and conservative.';
 
 const defaultGeminiIdentificationModels = [
   'gemini-3.7-flash',
@@ -99,6 +140,14 @@ function normalizePlantIdentification(result: Record<string, unknown>): PlantIde
     imageCategory === 'LIVE_PLANT' &&
     classificationConfidence >= 0.65;
   const identificationConfidence = confidenceValue(result.confidence);
+  const suggestedLocation = containsRealPlant
+    ? textValue(result.suggestedLocation, 'Bright indirect light').slice(0, 200)
+    : '';
+  const recommendedEnvironment =
+    result.recommendedEnvironment === 'OUTDOOR' ||
+    /outdoor|garden|terrace|balcony|full sun|direct sun/i.test(suggestedLocation)
+      ? 'OUTDOOR'
+      : 'INDOOR';
   return {
     containsRealPlant,
     imageCategory,
@@ -116,10 +165,31 @@ function normalizePlantIdentification(result: Record<string, unknown>): PlantIde
     confidence: containsRealPlant
       ? identificationConfidence
       : Math.min(0.29, identificationConfidence),
-    suggestedLocation: containsRealPlant
-      ? textValue(result.suggestedLocation, 'Bright indirect light').slice(0, 200)
-      : '',
+    suggestedLocation,
     notes: containsRealPlant ? textValue(result.notes, '').slice(0, 500) : '',
+    recommendedEnvironment,
+    environmentReason: containsRealPlant
+      ? textValue(
+          result.environmentReason,
+          recommendedEnvironment === 'OUTDOOR'
+            ? 'This plant normally benefits from stronger sunlight and outdoor airflow.'
+            : 'This plant can adapt well to protected indoor conditions.',
+        ).slice(0, 400)
+      : '',
+    indoorRisks: containsRealPlant
+      ? textValue(
+          result.indoorRisks,
+          recommendedEnvironment === 'OUTDOOR'
+            ? 'Low indoor light and airflow may cause weak growth, fewer flowers, damp soil, or pests.'
+            : 'Low light and overwatering can still cause weak growth or root problems.',
+        ).slice(0, 500)
+      : '',
+    indoorAdaptationAdvice: containsRealPlant
+      ? textValue(
+          result.indoorAdaptationAdvice,
+          'Use the brightest suitable window or a grow light, maintain airflow and drainage, and check the soil before watering.',
+        ).slice(0, 600)
+      : '',
   };
 }
 
@@ -257,6 +327,10 @@ export class AiResponseService {
                 'imageCategory',
                 'classificationConfidence',
                 'rejectionReason',
+                'recommendedEnvironment',
+                'environmentReason',
+                'indoorRisks',
+                'indoorAdaptationAdvice',
               ],
               properties: {
                 containsRealPlant: { type: 'BOOLEAN' },
@@ -284,6 +358,13 @@ export class AiResponseService {
                 confidence: { type: 'NUMBER', minimum: 0, maximum: 1 },
                 suggestedLocation: { type: 'STRING' },
                 notes: { type: 'STRING' },
+                recommendedEnvironment: {
+                  type: 'STRING',
+                  enum: ['INDOOR', 'OUTDOOR'],
+                },
+                environmentReason: { type: 'STRING' },
+                indoorRisks: { type: 'STRING' },
+                indoorAdaptationAdvice: { type: 'STRING' },
               },
             },
             maxOutputTokens: 600,
@@ -360,6 +441,10 @@ export class AiResponseService {
                 'imageCategory',
                 'classificationConfidence',
                 'rejectionReason',
+                'recommendedEnvironment',
+                'environmentReason',
+                'indoorRisks',
+                'indoorAdaptationAdvice',
               ],
               properties: {
                 containsRealPlant: { type: 'boolean' },
@@ -383,6 +468,13 @@ export class AiResponseService {
                 confidence: { type: 'number', minimum: 0, maximum: 1 },
                 suggestedLocation: { type: 'string' },
                 notes: { type: 'string' },
+                recommendedEnvironment: {
+                  type: 'string',
+                  enum: ['INDOOR', 'OUTDOOR'],
+                },
+                environmentReason: { type: 'string' },
+                indoorRisks: { type: 'string' },
+                indoorAdaptationAdvice: { type: 'string' },
               },
             },
           },
@@ -415,6 +507,8 @@ export class AiResponseService {
     history: ConversationTurn[] = [],
   ): Promise<string> {
     const language = detectResponseLanguage(question);
+    const casualReply = friendlySmallTalk(question, language);
+    if (casualReply) return casualReply;
     const apiKey = process.env.GEMINI_API_KEY;
     if (apiKey) {
       try {
@@ -453,7 +547,7 @@ export class AiResponseService {
           systemInstruction: {
             parts: [
               {
-                text: `You are GreenNest Plant Coach, a concise and practical gardening assistant. ${languageInstruction(language)} Always follow the CURRENT QUESTION language, even if conversation history uses another language. Use current verified plant data and current plant history before generic knowledge. Direct user statements and corrections outrank AI inference. Historical outcomes and repeated user patterns are supporting evidence only and must never override conflicting current evidence. Never invent plant history, preferences, events, causes, or sources. Distinguish user-reported causes from AI inferences and never present uncertainty as fact. Give a direct answer first, then short practical steps when useful. Use simple headings or bullets for multi-step advice. If evidence is insufficient, state what is unknown. Never mention the underlying model or provider. Never claim that the model was retrained. For photos, describe visible symptoms, offer possible causes with uncertainty, practical next steps, and ask for missing details. Include safety warnings for pesticides, toxic plants, or consumption.`,
+                text: `You are GreenNest Plant Buddy: a warm, friendly companion who is also a concise and practical plant-care expert. ${languageInstruction(language)} Always follow the CURRENT QUESTION language, even if conversation history uses another language. For greetings, thanks, wellbeing, or casual conversation, reply naturally like a friendly person in 1-3 short sentences. Do not force gardening advice, garden statistics, missing-data notices, or diagnostic questions into casual chat. Never claim to be human. When the user asks about plants, use current verified plant data and current plant history before generic knowledge. Direct user statements and corrections outrank AI inference. Historical outcomes and repeated user patterns are supporting evidence only and must never override conflicting current evidence. Never invent plant history, preferences, events, causes, or sources. Distinguish user-reported causes from AI inferences and never present uncertainty as fact. Give a direct answer first, then short practical steps when useful. Use simple headings or bullets for multi-step advice. If evidence is insufficient, state what is unknown. Never mention the underlying model or provider. Never claim that the model was retrained. For photos, describe visible symptoms, offer possible causes with uncertainty, practical next steps, and ask for missing details. Include safety warnings for pesticides, toxic plants, or consumption.`,
               },
             ],
           },

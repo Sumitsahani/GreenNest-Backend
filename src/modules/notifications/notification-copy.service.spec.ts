@@ -17,6 +17,17 @@ const facts: WeatherNotificationFacts = {
 };
 
 describe('NotificationCopyService safety', () => {
+  it('gives useful severe-weather guidance even when the user has no plants', () => {
+    const content = buildFallbackWeatherNotification(
+      { ...facts, plantNames: [], recentlyWatered: false, rainSensitive: false },
+      NotificationTone.CALM,
+    );
+
+    expect(content.body).toContain('rain gear');
+    expect(content.body).not.toContain('Outdoor plants');
+    expect(isSafeNotificationContent(content, { ...facts, plantNames: [] })).toBe(true);
+  });
+
   it('uses a playful tone for ages 18-35 when preference is automatic', () => {
     const tone = resolveNotificationTone(NotificationAgeGroup.AGE_18_35, NotificationTone.AUTO);
     const content = buildFallbackWeatherNotification(facts, tone);

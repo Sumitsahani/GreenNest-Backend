@@ -11,6 +11,22 @@ describe('detectResponseLanguage', () => {
   });
 });
 
+describe('AiResponseService friendly conversation', () => {
+  it('responds to a greeting as Plant Buddy without forcing garden diagnostics', async () => {
+    const response = await new AiResponseService().generate('Hello, how are you?', {
+      garden: [],
+      memories: [],
+      intent: 'OTHER',
+      plantId: null,
+      sourcesUsed: [],
+      promptContext: 'No garden context is needed for this greeting.',
+    });
+
+    expect(response).toContain('Plant Buddy');
+    expect(response).not.toContain('saved garden plant');
+  });
+});
+
 describe('AiResponseService plant identification', () => {
   const originalKey = process.env.GEMINI_API_KEY;
   const originalUrl = process.env.SUPABASE_URL;

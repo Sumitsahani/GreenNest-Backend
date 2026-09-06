@@ -4,7 +4,12 @@ import {
   type OnApplicationBootstrap,
   type OnApplicationShutdown,
 } from '@nestjs/common';
-import { NotificationAgeGroup, NotificationTone, PlantLifecycleStatus } from '@prisma/client';
+import {
+  NotificationAgeGroup,
+  NotificationTone,
+  PlantEnvironment,
+  PlantLifecycleStatus,
+} from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 import { ExpoPushService } from './expo-push.service';
 import {
@@ -45,10 +50,19 @@ interface AlertPlant {
   species: string | null;
   category: string | null;
   location: string;
+  environment: PlantEnvironment;
   weatherLocation: string | null;
   latitude: number | null;
   longitude: number | null;
   lastWateredAt: Date | null;
+}
+
+interface AlertLocationGroup {
+  userId: string;
+  location: string;
+  latitude: number;
+  longitude: number;
+  plants: AlertPlant[];
 }
 
 export function evaluateThreeHourRain(
@@ -146,20 +160,43 @@ export class WeatherAlertDispatcherService
         species: true,
         category: true,
         location: true,
+        environment: true,
         weatherLocation: true,
         latitude: true,
         longitude: true,
         lastWateredAt: true,
       },
     });
-    const groups = this.groupOutdoorPlants(plants);
+    const devices = await this.prisma.pushDevice.findMany({
+      where: {
+        active: true,
+        latitude: { not: null },
+        longitude: { not: null },
+      },
+      select: {
+        userId: true,
+        locationLabel: true,
+        latitude: true,
+        longitude: true,
+      },
+    });
+    const groups = this.groupAlertLocations(plants, devices);
     for (const group of groups.values()) await this.processLocation(group);
   }
 
-  private groupOutdoorPlants(plants: AlertPlant[]): Map<string, AlertPlant[]> {
-    const groups = new Map<string, AlertPlant[]>();
+  private groupAlertLocations(
+    plants: AlertPlant[],
+    devices: Array<{
+      userId: string;
+      locationLabel: string | null;
+      latitude: number | null;
+      longitude: number | null;
+    }>,
+  ): Map<string, AlertLocationGroup> {
+    const groups = new Map<string, AlertLocationGroup>();
     for (const plant of plants) {
       if (
+        plant.environment !== PlantEnvironment.OUTDOOR &&
         !outdoorPattern.test(plant.location) ||
         plant.latitude === null ||
         plant.longitude === null
@@ -168,46 +205,65 @@ export class WeatherAlertDispatcherService
       }
       const locationKey = `${plant.latitude.toFixed(2)},${plant.longitude.toFixed(2)}`;
       const key = `${plant.userId}:${locationKey}`;
-      groups.set(key, [...(groups.get(key) ?? []), plant]);
+      const existing = groups.get(key);
+      groups.set(key, {
+        userId: plant.userId,
+        location: plant.weatherLocation ?? plant.location,
+        latitude: plant.latitude,
+        longitude: plant.longitude,
+        plants: [...(existing?.plants ?? []), plant],
+      });
+    }
+    for (const device of devices) {
+      if (device.latitude === null || device.longitude === null) continue;
+      const locationKey = `${device.latitude.toFixed(2)},${device.longitude.toFixed(2)}`;
+      const key = `${device.userId}:${locationKey}`;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          userId: device.userId,
+          location: device.locationLabel ?? 'your current area',
+          latitude: device.latitude,
+          longitude: device.longitude,
+          plants: [],
+        });
+      }
     }
     return groups;
   }
 
-  private async processLocation(plants: AlertPlant[]): Promise<void> {
-    const first = plants[0];
-    if (!first || first.latitude === null || first.longitude === null) return;
+  private async processLocation(group: AlertLocationGroup): Promise<void> {
     const settings = await this.prisma.userSettings.findUnique({
-      where: { userId: first.userId },
+      where: { userId: group.userId },
     });
-    if (settings && (!settings.pushEnabled || !settings.careReminders)) return;
+    if (settings && !settings.pushEnabled) return;
 
-    const locationKey = `${first.latitude.toFixed(2)},${first.longitude.toFixed(2)}`;
+    const locationKey = `${group.latitude.toFixed(2)},${group.longitude.toFixed(2)}`;
     const recent = await this.prisma.weatherAlertDelivery.findFirst({
       where: {
-        userId: first.userId,
+        userId: group.userId,
         locationKey,
         sentAt: { gte: new Date(Date.now() - alertCooldownMs) },
       },
     });
     if (recent) return;
 
-    const risk = await this.fetchThreeHourRisk(first.latitude, first.longitude);
+    const risk = await this.fetchThreeHourRisk(group.latitude, group.longitude);
     if (!risk) return;
-    const eventKey = `${first.userId}:${locationKey}:${risk.eventStartsAt.toISOString()}`;
+    const eventKey = `${group.userId}:${locationKey}:${risk.eventStartsAt.toISOString()}`;
     const alreadySent = await this.prisma.weatherAlertDelivery.findUnique({
       where: { eventKey },
     });
     if (alreadySent) return;
 
-    const facts = this.createFacts(plants, risk);
+    const facts = this.createFacts(group, risk);
     const content = await this.copy.weatherAlert(
       facts,
       settings?.notificationAgeGroup ?? NotificationAgeGroup.UNSPECIFIED,
       settings?.notificationTone ?? NotificationTone.AUTO,
     );
-    const delivery = await this.push.sendToUser(first.userId, {
+    const delivery = await this.push.sendToUser(group.userId, {
       ...content,
-      url: '/(tabs)/garden',
+      url: group.plants.length ? '/(tabs)/garden' : '/(tabs)/home',
       data: { kind: 'IMPORTANT_WEATHER_ALERT', severity: risk.severity },
     });
     if (!delivery.delivered && delivery.deviceCount > 0) return;
@@ -215,7 +271,7 @@ export class WeatherAlertDispatcherService
     await this.prisma.$transaction([
       this.prisma.notification.create({
         data: {
-          userId: first.userId,
+          userId: group.userId,
           title: content.title,
           message: content.body,
           type: 'WEATHER_ALERT',
@@ -223,7 +279,7 @@ export class WeatherAlertDispatcherService
       }),
       this.prisma.weatherAlertDelivery.create({
         data: {
-          userId: first.userId,
+          userId: group.userId,
           locationKey,
           eventKey,
           severity: risk.severity,
@@ -251,18 +307,20 @@ export class WeatherAlertDispatcherService
     return evaluateThreeHourRain(((await response.json()) as ForecastResponse).hourly);
   }
 
-  private createFacts(plants: AlertPlant[], risk: HeavyRainRisk): WeatherNotificationFacts {
-    const location = plants[0]?.weatherLocation ?? plants[0]?.location ?? 'your garden';
-    const names = plants.slice(0, 2).map((plant) => plant.name);
-    const recentlyWatered = plants.some(
+  private createFacts(
+    group: AlertLocationGroup,
+    risk: HeavyRainRisk,
+  ): WeatherNotificationFacts {
+    const names = group.plants.slice(0, 2).map((plant) => plant.name);
+    const recentlyWatered = group.plants.some(
       (plant) =>
         plant.lastWateredAt && plant.lastWateredAt.getTime() >= Date.now() - 2 * 86_400_000,
     );
-    const rainSensitive = plants.some((plant) =>
+    const rainSensitive = group.plants.some((plant) =>
       rainSensitivePattern.test(`${plant.name} ${plant.species ?? ''} ${plant.category ?? ''}`),
     );
     return {
-      location,
+      location: group.location,
       plantNames: names,
       probability: risk.probability,
       precipitationMm: risk.precipitationMm,

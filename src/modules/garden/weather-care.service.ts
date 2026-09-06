@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { PlantEnvironment } from '@prisma/client';
 
 export type SmartWateringStatus =
   'CHECK_NOW' | 'CHECK_EARLIER' | 'DELAY_WATERING' | 'ON_SCHEDULE' | 'LOCATION_NEEDED';
@@ -7,6 +8,7 @@ export interface PlantWeatherInput {
   id: string;
   name: string;
   location: string;
+  environment?: PlantEnvironment;
   weatherLocation: string | null;
   latitude: number | null;
   longitude: number | null;
@@ -137,7 +139,9 @@ export class WeatherCareService {
       ? new Date(input.lastWateredAt.getTime() + input.wateringDays * 86_400_000)
       : new Date(input.nextWateringAt);
     const daysUntilBase = (base.getTime() - now.getTime()) / 86_400_000;
-    const outdoor = /balcony|terrace|outdoor|garden|patio|roof|veranda/i.test(input.location);
+    const outdoor =
+      input.environment === PlantEnvironment.OUTDOOR ||
+      /balcony|terrace|outdoor|garden|patio|roof|veranda/i.test(input.location);
     let adjustmentDays = 0;
     const signals = ['watering_interval', 'last_watered'];
     let weatherReason = '';
