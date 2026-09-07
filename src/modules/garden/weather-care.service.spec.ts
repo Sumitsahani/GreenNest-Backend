@@ -5,6 +5,12 @@ import {
 } from './weather-care.service';
 
 describe('WeatherCareService', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  const forecast = {
+    current: { temperature_2m: 30, relative_humidity_2m: 65, weather_code: 1 },
+    daily: { temperature_2m_max: [32], precipitation_sum: [0], precipitation_probability_max: [10] },
+  };
   const service = new WeatherCareService();
   const now = new Date('2026-09-05T06:00:00.000Z');
   const plant = (overrides: Partial<PlantWeatherInput> = {}): PlantWeatherInput => ({
@@ -29,6 +35,37 @@ describe('WeatherCareService', () => {
     precipitationSum: 0,
     precipitationProbability: 5,
     ...overrides,
+  });
+
+  it('shares concurrent forecasts for plants in the same location', async () => {
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true, status: 200, json: async () => forecast,
+    } as Response);
+    const subject = new WeatherCareService();
+    const results = await Promise.all([subject.createReminder(plant()), subject.createReminder(plant())]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(results.every((result) => result.weather?.temperature === 30)).toBe(true);
+    await subject.createReminder(plant());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('recovers from a temporary network failure', async () => {
+    const fetchMock = jest.spyOn(global, 'fetch')
+      .mockRejectedValueOnce(new Error('network disconnected'))
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => forecast } as Response);
+    const result = await new WeatherCareService().createReminder(plant());
+    expect(result.weather?.temperature).toBe(30);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('resolves the saved city for older plants without coordinates', async () => {
+    jest.spyOn(global, 'fetch')
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ results: [] }) } as Response)
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ results: [{ name: 'Delhi', latitude: 28.61, longitude: 77.2 }] }) } as Response)
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => forecast } as Response);
+    const result = await new WeatherCareService().createReminder(plant({ latitude: null, longitude: null }));
+    expect(result.weather?.temperature).toBe(30);
+    expect(result.status).not.toBe('LOCATION_NEEDED');
   });
 
   it('moves a soil check earlier for hot and dry weather', () => {
