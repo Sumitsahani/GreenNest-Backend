@@ -5,6 +5,7 @@
   "description": "GreenNest REST API contract foundation",
   "license": "UNLICENSED",
   "scripts": {
+    "prebuild": "prisma generate",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
     "start:dev": "ts-node --project tsconfig.json src/main.ts",
