@@ -34,10 +34,9 @@ import { PlantStateService, type PlantState } from './plant-state.service';
 import { UserGardeningProfileService } from './user-gardening-profile.service';
 
 type HistoricalRelationship = PlantRelationship & {
-  previousPlant: Pick<
-    GardenPlant,
-    'id' | 'name' | 'species' | 'lifecycleStatus'
-  > & { outcomes: PlantOutcomeRecord[] };
+  previousPlant: Pick<GardenPlant, 'id' | 'name' | 'species' | 'lifecycleStatus'> & {
+    outcomes: PlantOutcomeRecord[];
+  };
 };
 
 interface PlantIntelligenceResult {
@@ -140,7 +139,8 @@ export class PlantIntelligenceService {
       activeStatuses.has(recommendation.status),
     );
     const needsAttention = actionableItems.filter(
-      ({ recommendation }) => recommendation.action !== 'NO_ACTION' && recommendation.action !== 'MONITOR',
+      ({ recommendation }) =>
+        recommendation.action !== 'NO_ACTION' && recommendation.action !== 'MONITOR',
     );
     return {
       attentionCount: needsAttention.length,
@@ -149,9 +149,7 @@ export class PlantIntelligenceService {
     };
   }
 
-  gardeningProfile(
-    userId: string,
-  ): ReturnType<UserGardeningProfileService['build']> {
+  gardeningProfile(userId: string): ReturnType<UserGardeningProfileService['build']> {
     return this.profiles.build(userId);
   }
 
@@ -242,8 +240,13 @@ export class PlantIntelligenceService {
     if (!plantId) return;
     const plant = await this.assertPlant(userId, plantId);
     const text = message.trim();
-    const moved = /\b(?:moved|shifted|placed)\s+(?:it|this plant|the plant)?\s*(?:to|near|in)\s+(?:the\s+)?([^.!?]{2,80})/i.exec(text)?.[1]?.trim();
-    const soilWet = /\bsoil\s+(?:is|feels|stays|remains)\s+(?:still\s+)?(?:wet|moist)\b/i.test(text);
+    const moved =
+      /\b(?:moved|shifted|placed)\s+(?:it|this plant|the plant)?\s*(?:to|near|in)\s+(?:the\s+)?([^.!?]{2,80})/i
+        .exec(text)?.[1]
+        ?.trim();
+    const soilWet = /\bsoil\s+(?:is|feels|stays|remains)\s+(?:still\s+)?(?:wet|moist)\b/i.test(
+      text,
+    );
     const died = /\b(?:plant\s+)?(?:died|is dead|has died)\b/i.test(text);
 
     if (moved) {
@@ -278,10 +281,7 @@ export class PlantIntelligenceService {
             },
           },
         });
-        if (
-          previous?.status === MemoryStatus.ACTIVE &&
-          previous.memoryValue !== moved
-        ) {
+        if (previous?.status === MemoryStatus.ACTIVE && previous.memoryValue !== moved) {
           await tx.aiUserMemory.update({
             where: { id: previous.id },
             data: {
@@ -336,9 +336,7 @@ export class PlantIntelligenceService {
     if (died && plant.lifecycleStatus !== PlantLifecycleStatus.DIED) {
       const uncertain = /\b(?:think|maybe|may|might|possibly|probably)\b/i.test(text);
       const overwatered = /overwater/i.test(text);
-      const reason = overwatered
-        ? `${uncertain ? 'POSSIBLE_CAUSE: ' : ''}OVERWATERING`
-        : undefined;
+      const reason = overwatered ? `${uncertain ? 'POSSIBLE_CAUSE: ' : ''}OVERWATERING` : undefined;
       await this.updateLifecycle(
         userId,
         plantId,
@@ -356,27 +354,39 @@ export class PlantIntelligenceService {
     plantId: string,
     dto: CreatePlantEventDto,
   ): Promise<PlantEvent> {
-    await this.assertPlant(userId, plantId);
-    return this.prisma.plantEvent.create({
-      data: {
-        userId,
-        plantId,
-        type: dto.type,
-        eventKey: dto.eventKey?.trim(),
-        value: dto.value as Prisma.InputJsonValue | undefined,
-        note: dto.note?.trim(),
-        source: dto.source ?? EvidenceSource.USER_STATEMENT,
-        confidence: dto.confidence ?? 1,
-        occurredAt: dto.occurredAt ? new Date(dto.occurredAt) : undefined,
-      },
+    const plant = await this.assertPlant(userId, plantId);
+    return this.prisma.$transaction(async (tx) => {
+      const event = await tx.plantEvent.create({
+        data: {
+          userId,
+          plantId,
+          type: dto.type,
+          eventKey: dto.eventKey?.trim(),
+          value: dto.value as Prisma.InputJsonValue | undefined,
+          note: dto.note?.trim(),
+          source: dto.source ?? EvidenceSource.USER_STATEMENT,
+          confidence: dto.confidence ?? 1,
+          occurredAt: dto.occurredAt ? new Date(dto.occurredAt) : undefined,
+        },
+      });
+      if (dto.type === PlantEventType.TREATMENT_APPLIED) {
+        const offsets = plant.health < 60 ? [3, 7, 14] : [7];
+        await tx.recoveryCheckpoint.createMany({
+          data: offsets.map((dayOffset) => ({
+            userId,
+            plantId,
+            treatmentEventId: event.id,
+            dayOffset,
+            dueAt: new Date(event.occurredAt.getTime() + dayOffset * 86_400_000),
+          })),
+          skipDuplicates: true,
+        });
+      }
+      return event;
     });
   }
 
-  async addPhoto(
-    userId: string,
-    plantId: string,
-    dto: AddPlantPhotoDto,
-  ): Promise<PlantPhoto> {
+  async addPhoto(userId: string, plantId: string, dto: AddPlantPhotoDto): Promise<PlantPhoto> {
     await this.assertPlant(userId, plantId);
     return this.prisma.$transaction(async (tx) => {
       const photo = await tx.plantPhoto.create({
@@ -446,9 +456,7 @@ export class PlantIntelligenceService {
         data: {
           userId,
           plantId,
-          type: outcome
-            ? PlantEventType.OUTCOME_RECORDED
-            : PlantEventType.MOVED,
+          type: outcome ? PlantEventType.OUTCOME_RECORDED : PlantEventType.MOVED,
           eventKey: 'lifecycle_status',
           value: { status: dto.status },
           note: dto.reason,
@@ -474,9 +482,7 @@ export class PlantIntelligenceService {
           outcome: dto.outcome,
           reason: dto.reason?.trim(),
           source: dto.source,
-          confidence:
-            dto.confidence ??
-            (dto.source === EvidenceSource.AI_INFERENCE ? 0.6 : 1),
+          confidence: dto.confidence ?? (dto.source === EvidenceSource.AI_INFERENCE ? 0.6 : 1),
         },
       });
       await tx.plantEvent.create({
@@ -522,10 +528,7 @@ export class PlantIntelligenceService {
         data: {
           status: dto.status,
           respondedAt: new Date(),
-          completedAt:
-            dto.status === RecommendationStatus.COMPLETED
-              ? new Date()
-              : undefined,
+          completedAt: dto.status === RecommendationStatus.COMPLETED ? new Date() : undefined,
           userResponseReason: dto.reason?.trim(),
           outcome: dto.outcome,
           outcomeNote: dto.outcomeNote?.trim(),
@@ -535,9 +538,7 @@ export class PlantIntelligenceService {
         data: {
           userId,
           plantId: recommendation.plantId,
-          type:
-            eventByStatus[dto.status as RecommendationStatus] ??
-            PlantEventType.USER_NOTE,
+          type: eventByStatus[dto.status as RecommendationStatus] ?? PlantEventType.USER_NOTE,
           eventKey: 'recommendation_response',
           value: {
             recommendationId,
@@ -662,17 +663,13 @@ export class PlantIntelligenceService {
         .filter(
           (outcome) =>
             outcome.reason &&
-            new Set<PlantOutcomeType>([
-              PlantOutcomeType.DECLINED,
-              PlantOutcomeType.DIED,
-            ]).has(outcome.outcome),
+            new Set<PlantOutcomeType>([PlantOutcomeType.DECLINED, PlantOutcomeType.DIED]).has(
+              outcome.outcome,
+            ),
         )
         .map((outcome) => ({
           reason: outcome.reason!,
-          confidence: Math.min(
-            Number(relationship.confidence),
-            Number(outcome.confidence),
-          ),
+          confidence: Math.min(Number(relationship.confidence), Number(outcome.confidence)),
           source: outcome.source,
         })),
     );
@@ -796,17 +793,17 @@ export class PlantIntelligenceService {
     const historical = relationships.find(
       (relationship) => relationship.previousPlant.outcomes.length > 0,
     );
-    if (!historical) return relationships.length
-      ? `You've cared for this plant type before. Current conditions will remain the primary guide.`
-      : null;
+    if (!historical)
+      return relationships.length
+        ? `You've cared for this plant type before. Current conditions will remain the primary guide.`
+        : null;
     const outcome = historical.previousPlant.outcomes[0];
     if (!outcome) return null;
     const cause = outcome.reason
       ? ` The recorded reason was ${outcome.reason.toLowerCase().replace(/_/g, ' ')}.`
       : '';
     const uncertainty =
-      outcome.source === EvidenceSource.AI_INFERENCE ||
-      Number(outcome.confidence) < 0.9
+      outcome.source === EvidenceSource.AI_INFERENCE || Number(outcome.confidence) < 0.9
         ? ' Treat that cause as possible, not confirmed.'
         : '';
     const prevention = /overwater|root.?rot/i.test(outcome.reason ?? '')

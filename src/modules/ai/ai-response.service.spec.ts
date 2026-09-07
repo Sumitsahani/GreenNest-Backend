@@ -25,6 +25,24 @@ describe('AiResponseService friendly conversation', () => {
     expect(response).toContain('Plant Buddy');
     expect(response).not.toContain('saved garden plant');
   });
+
+  it('honors an explicit Hindi preference while keeping one conversation context', async () => {
+    const response = await new AiResponseService().generate(
+      'Hello, how are you?',
+      {
+        garden: [],
+        memories: [],
+        intent: 'OTHER',
+        plantId: null,
+        sourcesUsed: [],
+        promptContext: 'Same conversation.',
+      },
+      undefined,
+      [],
+      'HINDI',
+    );
+    expect(response).toMatch(/[\u0900-\u097f]/u);
+  });
 });
 
 describe('AiResponseService plant identification', () => {

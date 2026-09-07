@@ -7,11 +7,11 @@ export interface ConversationTurn {
   role: 'USER' | 'ASSISTANT';
   content: string;
 }
-
 export type ResponseLanguage = 'ENGLISH' | 'HINGLISH' | 'HINDI';
+export type LanguagePreference = 'AUTO' | 'ENGLISH' | 'HINDI';
 
 export function detectResponseLanguage(question: string): ResponseLanguage {
-  if (/[ऀ-ॿ]/u.test(question)) return 'HINDI';
+  if (/\p{Script=Devanagari}/u.test(question)) return 'HINDI';
   const romanHindiMarkers = question.match(
     /\b(?:kya|kyu|kyon|kaise|kab|kahan|mera|meri|mere|isko|usko|mujhe|paani|pani|mitti|patta|patte|dhoop|nahi|nahin|karu|karna|hoga|raha|rahi|hai|hain|wala|wali|aur|par|pe|ko)\b/gi,
   );
@@ -31,7 +31,7 @@ function languageInstruction(language: ResponseLanguage): string {
 function friendlySmallTalk(question: string, language: ResponseLanguage): string | null {
   const text = question
     .toLowerCase()
-    .replace(/[^a-z\u0900-\u097f\s']/gu, ' ')
+    .replace(/[^\p{Letter}\s']/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   const greeting =
@@ -505,8 +505,9 @@ export class AiResponseService {
     context: AiContext,
     imageUrl?: string,
     history: ConversationTurn[] = [],
+    preference: LanguagePreference = 'AUTO',
   ): Promise<string> {
-    const language = detectResponseLanguage(question);
+    const language = preference === 'AUTO' ? detectResponseLanguage(question) : preference;
     const casualReply = friendlySmallTalk(question, language);
     if (casualReply) return casualReply;
     const apiKey = process.env.GEMINI_API_KEY;

@@ -73,3 +73,16 @@ export class CreateReminderDto {
 export class UpdateReminderDto {
   @ApiProperty() @IsBoolean() enabled!: boolean;
 }
+export enum CareResponse {
+  WATERED = 'WATERED',
+  BUSY = 'BUSY',
+  SOIL_WET = 'SOIL_WET',
+}
+export class RespondCareDto {
+  @ApiProperty({ enum: CareResponse }) @IsEnum(CareResponse) action!: CareResponse;
+  @ApiProperty({ required: false }) @IsOptional() @IsDateString() remindAt?: string;
+}
+export class CareTimingDto {
+  @ApiProperty() @IsString() @MaxLength(80) timezone!: string;
+  @ApiProperty({ minimum: 8, maximum: 20 }) @IsInt() @Min(8) @Max(20) hour!: number;
+}

@@ -18,6 +18,7 @@ describe('GardenService care events', () => {
     };
     const findFirst = jest.fn().mockResolvedValue(plant);
     const tx = {
+      notification: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       careEvent: { create: jest.fn().mockResolvedValue({}) },
       gardenPlant: { update: jest.fn().mockResolvedValue({}) },
       careReminder: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
@@ -31,7 +32,9 @@ describe('GardenService care events', () => {
       recordCareEvent: jest.fn().mockResolvedValue(undefined),
     } as unknown as PlantIntelligenceService;
     const weatherCare = {} as WeatherCareService;
-    const service = new GardenService(prisma, carePlans, intelligence, weatherCare);
+    const service = new GardenService(prisma, carePlans, intelligence, weatherCare, {
+      invalidate: jest.fn(),
+    } as never);
 
     await service.care('user-1', 'plant-1', { type: CareAction.WATER });
 

@@ -1,5 +1,5 @@
 import { NotificationAgeGroup, NotificationTone } from '@prisma/client';
-import { IsBoolean, IsEnum, IsOptional } from 'class-validator';
+import { IsBoolean, IsEnum, IsIn, IsOptional } from 'class-validator';
 
 export class UpdateSettingsDto {
   @IsOptional() @IsBoolean() orderUpdates?: boolean;
@@ -10,4 +10,5 @@ export class UpdateSettingsDto {
   @IsOptional() @IsBoolean() emailEnabled?: boolean;
   @IsOptional() @IsEnum(NotificationAgeGroup) notificationAgeGroup?: NotificationAgeGroup;
   @IsOptional() @IsEnum(NotificationTone) notificationTone?: NotificationTone;
+  @IsOptional() @IsIn(['AUTO', 'ENGLISH', 'HINDI']) aiLanguage?: string;
 }

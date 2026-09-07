@@ -8,9 +8,11 @@ import {
   CreatePlantDto,
   CreateReminderDto,
   UpdateReminderDto,
+  RespondCareDto,
+  CareTimingDto,
 } from './dto/garden.dto';
 import { GardenService } from './garden.service';
-import type { GardenPlantResponse } from './garden.service';
+import type { GardenPlantResponse, CareTimingResponse } from './garden.service';
 import type { SmartCareReminder } from './weather-care.service';
 
 @ApiTags('My Garden')
@@ -19,6 +21,25 @@ import type { SmartCareReminder } from './weather-care.service';
 @Controller('garden/plants')
 export class GardenController {
   constructor(private readonly garden: GardenService) {}
+  @Get('care-timing')
+  careTiming(@CurrentUser() user: AuthenticatedUser): Promise<CareTimingResponse> {
+    return this.garden.careTiming(user.id);
+  }
+  @Patch('care-timing')
+  setCareTiming(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CareTimingDto,
+  ): Promise<CareTimingResponse> {
+    return this.garden.setCareTiming(user.id, dto);
+  }
+  @Post(':id/care-response')
+  respondCare(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: RespondCareDto,
+  ): Promise<GardenPlantResponse> {
+    return this.garden.respondCare(user.id, id, dto);
+  }
   @Get() list(@CurrentUser() user: AuthenticatedUser): Promise<GardenPlantResponse[]> {
     return this.garden.list(user.id);
   }

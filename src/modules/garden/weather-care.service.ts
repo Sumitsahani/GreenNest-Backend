@@ -15,7 +15,12 @@ export interface PlantWeatherInput {
   wateringDays: number;
   lastWateredAt: Date | null;
   nextWateringAt: Date;
-  reminder?: { id: string; enabled: boolean } | null;
+  reminder?: {
+    id: string;
+    enabled: boolean;
+    snoozedUntil?: Date | null;
+    responseReason?: string | null;
+  } | null;
 }
 
 export interface ResolvedWeatherLocation {
@@ -175,6 +180,14 @@ export class WeatherCareService {
 
     const scheduledAt = new Date(base);
     scheduledAt.setDate(scheduledAt.getDate() + adjustmentDays);
+    if (input.reminder?.snoozedUntil) {
+      scheduledAt.setTime(input.reminder.snoozedUntil.getTime());
+      signals.push('user_requested_timing');
+      weatherReason =
+        input.reminder.responseReason === 'SOIL_WET'
+          ? 'You reported wet soil. Check again at the selected time; water only if dry.'
+          : 'Your requested check-in time is being used.';
+    }
     const dueNow = scheduledAt <= now;
     let status: SmartWateringStatus = 'ON_SCHEDULE';
     let title = `Check soil on ${scheduledAt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`;
@@ -228,10 +241,12 @@ export class WeatherCareService {
     if (cached && cached.expiresAt > Date.now()) return cached.value;
     const pending = this.pendingForecasts.get(key);
     if (pending) return pending;
-    const request = this.fetchForecast(latitude, longitude).then((value) => {
-      this.forecastCache.set(key, { expiresAt: Date.now() + 15 * 60_000, value });
-      return value;
-    }).finally(() => this.pendingForecasts.delete(key));
+    const request = this.fetchForecast(latitude, longitude)
+      .then((value) => {
+        this.forecastCache.set(key, { expiresAt: Date.now() + 15 * 60_000, value });
+        return value;
+      })
+      .finally(() => this.pendingForecasts.delete(key));
     this.pendingForecasts.set(key, request);
     return request;
   }
