@@ -7,6 +7,8 @@ import {
 import { CareType, PlantLifecycleStatus, type PushDevice } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 import { WeatherCareService } from '../garden/weather-care.service';
+import { canDeliverCare } from './care-delivery-policy';
+import { GardenIntelligenceService } from '../intelligence/garden-intelligence.service';
 
 interface ExpoPushTicket {
   status: 'ok' | 'error';
@@ -25,6 +27,7 @@ export class CareReminderDispatcherService
   constructor(
     private readonly prisma: PrismaService,
     private readonly weatherCare: WeatherCareService,
+    private readonly gardenIntelligence: GardenIntelligenceService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -59,67 +62,106 @@ export class CareReminderDispatcherService
       where: {
         enabled: true,
         type: CareType.WATER,
-        scheduledAt: { lte: candidateCutoff },
+        notificationCount: { lt: 3 },
+        OR: [{ scheduledAt: { lte: candidateCutoff } }, { snoozedUntil: { lte: now } }],
         plant: {
           lifecycleStatus: { in: [PlantLifecycleStatus.ACTIVE, PlantLifecycleStatus.MOVED] },
         },
       },
       include: { plant: true },
       orderBy: { scheduledAt: 'asc' },
-      take: 100,
+      take: 250,
     });
-
-    for (const reminder of reminders) {
-      if (reminder.lastNotifiedAt && reminder.lastNotifiedAt >= reminder.scheduledAt) continue;
-      const settings = await this.prisma.userSettings.findUnique({
-        where: { userId: reminder.plant.userId },
+    const userIds = [...new Set(reminders.map((reminder) => reminder.plant.userId))];
+    for (const userId of userIds) {
+      const settings = await this.prisma.userSettings.findUnique({ where: { userId } });
+      if (settings && !settings.careReminders) continue;
+      const garden = await this.gardenIntelligence.today(userId);
+      const actionable = new Map(garden.items.map((item) => [item.plant.id, item]));
+      const unique = [
+        ...new Map(
+          reminders
+            .filter((value) => value.plant.userId === userId && actionable.has(value.plant.id))
+            .map((value) => [value.plant.id, value]),
+        ).values(),
+      ];
+      const eligible: typeof reminders = [];
+      for (const reminder of unique) {
+        const smart = await this.weatherCare.createReminder({
+          id: reminder.plant.id,
+          name: reminder.plant.name,
+          location: reminder.plant.location,
+          environment: reminder.plant.environment,
+          weatherLocation: reminder.plant.weatherLocation,
+          latitude: reminder.plant.latitude,
+          longitude: reminder.plant.longitude,
+          wateringDays: reminder.plant.wateringDays,
+          lastWateredAt: reminder.plant.lastWateredAt,
+          nextWateringAt: reminder.plant.nextWateringAt,
+          reminder,
+        });
+        if (
+          canDeliverCare({
+            now,
+            dueAt: smart.scheduledAt,
+            lastNotifiedAt: reminder.lastNotifiedAt,
+            count: reminder.notificationCount,
+            timezone: settings?.careTimezone ?? 'Asia/Kolkata',
+            preferredHour: settings?.preferredCareHour ?? 9,
+          })
+        )
+          eligible.push(reminder);
+      }
+      if (!eligible.length) continue;
+      const title =
+        eligible.length === 1
+          ? `${eligible[0]!.plant.name}: care check due`
+          : `${eligible.length} plants need care today`;
+      const locations = [...new Set(eligible.map((value) => value.plant.location))];
+      const message =
+        eligible.length === 1
+          ? actionable.get(eligible[0]!.plant.id)!.reason
+          : `Review ${eligible.length} prioritized soil checks${locations.length ? ` in ${locations.slice(0, 2).join(' and ')}` : ''}. Mark only the plants you skipped.`;
+      const claimedIds = await this.prisma.$transaction(async (tx) => {
+        const ids: string[] = [];
+        for (const reminder of eligible) {
+          const claimed = await tx.careReminder.updateMany({
+            where: {
+              id: reminder.id,
+              enabled: true,
+              updatedAt: reminder.updatedAt,
+              notificationCount: reminder.notificationCount,
+            },
+            data: { lastNotifiedAt: now, notificationCount: { increment: 1 } },
+          });
+          if (claimed.count) ids.push(reminder.id);
+        }
+        if (ids.length)
+          await tx.notification.create({
+            data: {
+              userId,
+              plantId: ids.length === 1 ? eligible[0]!.plant.id : null,
+              title,
+              message,
+              type: 'GARDEN_CARE_BATCH',
+            },
+          });
+        return ids;
       });
-      if (settings && (!settings.careReminders || !settings.pushEnabled)) continue;
-
-      const smart = await this.weatherCare.createReminder({
-        id: reminder.plant.id,
-        name: reminder.plant.name,
-        location: reminder.plant.location,
-        weatherLocation: reminder.plant.weatherLocation,
-        latitude: reminder.plant.latitude,
-        longitude: reminder.plant.longitude,
-        wateringDays: reminder.plant.wateringDays,
-        lastWateredAt: reminder.plant.lastWateredAt,
-        nextWateringAt: reminder.plant.nextWateringAt,
-        reminder,
+      if (!claimedIds.length || settings?.pushEnabled === false) continue;
+      const devices = await this.prisma.pushDevice.findMany({ where: { userId, active: true } });
+      await this.sendExpoPush(devices, {
+        title,
+        body: message,
+        plantId: claimedIds.length === 1 ? eligible[0]!.plant.id : undefined,
+        url: claimedIds.length === 1 ? `/plant/${eligible[0]!.plant.id}` : '/screen/batch-care',
       });
-      if (smart.scheduledAt > now) continue;
-
-      const devices = await this.prisma.pushDevice.findMany({
-        where: { userId: reminder.plant.userId, active: true },
-      });
-      const delivered = await this.sendExpoPush(devices, {
-        title: `${reminder.plant.name}: ${smart.title}`,
-        body: smart.reason,
-        plantId: reminder.plant.id,
-      });
-      if (!delivered && devices.length > 0) continue;
-
-      await this.prisma.$transaction([
-        this.prisma.notification.create({
-          data: {
-            userId: reminder.plant.userId,
-            title: `${reminder.plant.name}: ${smart.title}`,
-            message: smart.reason,
-            type: 'CARE_REMINDER',
-          },
-        }),
-        this.prisma.careReminder.update({
-          where: { id: reminder.id },
-          data: { lastNotifiedAt: now },
-        }),
-      ]);
     }
   }
 
   private async sendExpoPush(
     devices: PushDevice[],
-    content: { title: string; body: string; plantId: string },
+    content: { title: string; body: string; plantId?: string; url: string },
   ): Promise<boolean> {
     if (devices.length === 0) return true;
     try {
@@ -137,7 +179,11 @@ export class CareReminderDispatcherService
             title: content.title,
             body: content.body,
             channelId: 'plant-care',
-            data: { url: `/plant/${content.plantId}`, plantId: content.plantId },
+            data: {
+              kind: 'CARE_REMINDER',
+              url: content.url,
+              plantId: content.plantId,
+            },
           })),
         ),
         signal: AbortSignal.timeout(15_000),

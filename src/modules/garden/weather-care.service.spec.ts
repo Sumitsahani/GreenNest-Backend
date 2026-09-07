@@ -9,7 +9,11 @@ describe('WeatherCareService', () => {
 
   const forecast = {
     current: { temperature_2m: 30, relative_humidity_2m: 65, weather_code: 1 },
-    daily: { temperature_2m_max: [32], precipitation_sum: [0], precipitation_probability_max: [10] },
+    daily: {
+      temperature_2m_max: [32],
+      precipitation_sum: [0],
+      precipitation_probability_max: [10],
+    },
   };
   const service = new WeatherCareService();
   const now = new Date('2026-09-05T06:00:00.000Z');
@@ -37,12 +41,32 @@ describe('WeatherCareService', () => {
     ...overrides,
   });
 
+  it('honors wet-soil snooze despite hot weather and an older watering date', () => {
+    const until = new Date('2026-09-08T12:00:00Z');
+    const result = service.evaluate(
+      plant({
+        reminder: { id: 'r', enabled: true, snoozedUntil: until, responseReason: 'SOIL_WET' },
+      }),
+      weather(),
+      false,
+      now,
+    );
+    expect(result.scheduledAt).toEqual(until);
+    expect(result.reason).toContain('You reported wet soil');
+    expect(result.signals).toContain('user_requested_timing');
+  });
+
   it('shares concurrent forecasts for plants in the same location', async () => {
     const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
-      ok: true, status: 200, json: async () => forecast,
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve(forecast),
     } as Response);
     const subject = new WeatherCareService();
-    const results = await Promise.all([subject.createReminder(plant()), subject.createReminder(plant())]);
+    const results = await Promise.all([
+      subject.createReminder(plant()),
+      subject.createReminder(plant()),
+    ]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(results.every((result) => result.weather?.temperature === 30)).toBe(true);
     await subject.createReminder(plant());
@@ -50,20 +74,32 @@ describe('WeatherCareService', () => {
   });
 
   it('recovers from a temporary network failure', async () => {
-    const fetchMock = jest.spyOn(global, 'fetch')
+    const fetchMock = jest
+      .spyOn(global, 'fetch')
       .mockRejectedValueOnce(new Error('network disconnected'))
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => forecast } as Response);
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve(forecast) } as Response);
     const result = await new WeatherCareService().createReminder(plant());
     expect(result.weather?.temperature).toBe(30);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('resolves the saved city for older plants without coordinates', async () => {
-    jest.spyOn(global, 'fetch')
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ results: [] }) } as Response)
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ results: [{ name: 'Delhi', latitude: 28.61, longitude: 77.2 }] }) } as Response)
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => forecast } as Response);
-    const result = await new WeatherCareService().createReminder(plant({ latitude: null, longitude: null }));
+    jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ results: [] }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ results: [{ name: 'Delhi', latitude: 28.61, longitude: 77.2 }] }),
+      } as Response)
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve(forecast) } as Response);
+    const result = await new WeatherCareService().createReminder(
+      plant({ latitude: null, longitude: null }),
+    );
     expect(result.weather?.temperature).toBe(30);
     expect(result.status).not.toBe('LOCATION_NEEDED');
   });

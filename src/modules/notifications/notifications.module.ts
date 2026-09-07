@@ -7,9 +7,10 @@ import { NotificationCopyService } from './notification-copy.service';
 import { PushDeviceController } from './push-device.controller';
 import { PushDeviceService } from './push-device.service';
 import { WeatherAlertDispatcherService } from './weather-alert-dispatcher.service';
+import { IntelligenceModule } from '../intelligence/intelligence.module';
 
 @Module({
-  imports: [GardenModule],
+  imports: [GardenModule, IntelligenceModule],
   controllers: [PushDeviceController],
   providers: [
     PushDeviceService,

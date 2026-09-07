@@ -76,12 +76,18 @@ export class AiService {
     dto: SendAiMessageDto,
   ): Promise<{
     userMessage: AiMessage;
-    assistantMessage: AiMessage;
+    assistantMessage: AiMessage | null;
     memoriesUpdated: number;
     careUpdate?: AiCareUpdate;
+    superseded?: boolean;
   }> {
     await this.assertConversation(userId, conversationId);
     const content = dto.message.trim();
+    const requestId = dto.requestId ?? crypto.randomUUID();
+    await this.prisma.aiConversation.update({
+      where: { id: conversationId },
+      data: { activeRequestId: requestId },
+    });
     // The first build validates optional plant ownership before any message is
     // persisted. Rebuild after extraction so an explicit correction in this
     // message can immediately influence the answer.
@@ -122,7 +128,21 @@ export class AiService {
           role: turn.role as 'USER' | 'ASSISTANT',
           content: turn.content,
         })),
+        dto.language ?? 'AUTO',
       ));
+    const current = await this.prisma.aiConversation.findFirst({
+      where: { id: conversationId, userId },
+      select: { activeRequestId: true },
+    });
+    if (current?.activeRequestId !== requestId) {
+      return {
+        userMessage,
+        assistantMessage: null,
+        memoriesUpdated: extracted.length,
+        careUpdate: careAction?.update,
+        superseded: true,
+      };
+    }
     const assistantMessage = await this.prisma.aiMessage.create({
       data: {
         conversationId,

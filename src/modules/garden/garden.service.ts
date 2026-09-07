@@ -5,6 +5,9 @@ import { BusinessException } from '../../common/exceptions/business.exception';
 import { PrismaService } from '../../database/prisma.service';
 import {
   CareAction,
+  CareResponse,
+  type RespondCareDto,
+  type CareTimingDto,
   type AddCareEventDto,
   type CreatePlantDto,
   type CreateReminderDto,
@@ -12,8 +15,14 @@ import {
 import { GardenCarePlanService } from './garden-care-plan.service';
 import { PlantIntelligenceService } from '../intelligence/plant-intelligence.service';
 import { WeatherCareService, type SmartCareReminder } from './weather-care.service';
+import { GardenIntelligenceService } from '../intelligence/garden-intelligence.service';
 
 export type GardenPlantResponse = Prisma.GardenPlantGetPayload<{ include: { careEvents: true } }>;
+export interface CareTimingResponse {
+  timezone: string;
+  hour: number;
+  suggestedHour: number | null;
+}
 
 @Injectable()
 export class GardenService {
@@ -22,6 +31,7 @@ export class GardenService {
     private readonly carePlans: GardenCarePlanService,
     private readonly intelligence: PlantIntelligenceService,
     private readonly weatherCare: WeatherCareService,
+    private readonly gardenIntelligence: GardenIntelligenceService,
   ) {}
   list(userId: string): Promise<GardenPlantResponse[]> {
     return this.prisma.gardenPlant.findMany({
@@ -78,6 +88,7 @@ export class GardenService {
       imageUrl: dto.imageUrl,
       species: dto.species,
     });
+    this.gardenIntelligence.invalidate(userId);
     return plant;
   }
   async detail(userId: string, id: string): Promise<GardenPlantResponse> {
@@ -113,10 +124,129 @@ export class GardenService {
       status: PlantLifecycleStatus.REMOVED,
       reason: 'Removed by user',
     });
+    this.gardenIntelligence.invalidate(userId);
     return { deleted: true };
   }
   async care(userId: string, id: string, dto: AddCareEventDto): Promise<GardenPlantResponse> {
     return this.recordCareAt(userId, id, dto, new Date());
+  }
+
+  async careTiming(userId: string): Promise<CareTimingResponse> {
+    const settings = await this.prisma.userSettings.findUnique({ where: { userId } });
+    const timezone = settings?.careTimezone ?? 'Asia/Kolkata';
+    const hour = settings?.preferredCareHour ?? 9;
+    const events = await this.prisma.careEvent.findMany({
+      where: {
+        type: CareType.WATER,
+        plant: { userId },
+        OR: [{ note: null }, { note: { not: 'Last watering provided when plant was added' } }],
+      },
+      orderBy: { caredAt: 'desc' },
+      take: 20,
+    });
+    const hours = events.map((event) =>
+      Number(
+        new Intl.DateTimeFormat('en-GB', {
+          timeZone: timezone,
+          hour: 'numeric',
+          hourCycle: 'h23',
+        }).format(event.caredAt),
+      ),
+    );
+    const counts = hours.reduce<Record<number, number>>((all, value) => {
+      all[value] = (all[value] ?? 0) + 1;
+      return all;
+    }, {});
+    const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+    const suggestedHour =
+      best &&
+      best[1] >= 3 &&
+      best[1] / hours.length >= 0.6 &&
+      Number(best[0]) >= 8 &&
+      Number(best[0]) <= 20 &&
+      Number(best[0]) !== hour
+        ? Number(best[0])
+        : null;
+    return { timezone, hour, suggestedHour };
+  }
+
+  async setCareTiming(userId: string, dto: CareTimingDto): Promise<CareTimingResponse> {
+    try {
+      new Intl.DateTimeFormat('en', { timeZone: dto.timezone }).format();
+    } catch {
+      throw new BusinessException(
+        ErrorCode.VALIDATION_ERROR,
+        'Invalid timezone',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    await this.prisma.userSettings.upsert({
+      where: { userId },
+      create: { userId, careTimezone: dto.timezone, preferredCareHour: dto.hour },
+      update: { careTimezone: dto.timezone, preferredCareHour: dto.hour },
+    });
+    return this.careTiming(userId);
+  }
+
+  async respondCare(userId: string, id: string, dto: RespondCareDto): Promise<GardenPlantResponse> {
+    const plant = await this.ownedPlant(userId, id);
+    if (!['ACTIVE', 'MOVED'].includes(plant.lifecycleStatus)) {
+      throw new BusinessException(
+        ErrorCode.VALIDATION_ERROR,
+        'This plant is no longer in active care',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    if (dto.action === CareResponse.WATERED)
+      return this.care(userId, id, {
+        type: CareAction.WATER,
+        note: 'Watering confirmed from care reminder',
+      });
+    const now = new Date();
+    const until =
+      dto.action === CareResponse.SOIL_WET
+        ? new Date(now.getTime() + 24 * 60 * 60_000)
+        : new Date(dto.remindAt ?? '');
+    if (
+      !Number.isFinite(until.getTime()) ||
+      until <= now ||
+      until.getTime() > now.getTime() + 7 * 86_400_000
+    ) {
+      throw new BusinessException(
+        ErrorCode.VALIDATION_ERROR,
+        'Choose a future check-in within seven days',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    await this.prisma.$transaction(async (tx) => {
+      const data = {
+        snoozedUntil: until,
+        responseReason: dto.action,
+        notificationCount: 0,
+        lastNotifiedAt: null,
+      };
+      const changed = await tx.careReminder.updateMany({
+        where: { plantId: id, type: CareType.WATER, enabled: true },
+        data,
+      });
+      if (!changed.count)
+        await tx.careReminder.create({
+          data: { plantId: id, type: CareType.WATER, scheduledAt: plant.nextWateringAt, ...data },
+        });
+      await tx.careEvent.create({
+        data: {
+          plantId: id,
+          type: CareType.NOTE,
+          caredAt: now,
+          note: `${dto.action}: soil check deferred until ${until.toISOString()}`,
+        },
+      });
+      await tx.notification.updateMany({
+        where: { userId, plantId: id, type: 'CARE_REMINDER', readAt: null },
+        data: { readAt: now },
+      });
+    });
+    return this.ownedPlant(userId, id);
   }
 
   async recordWateringAt(
@@ -142,11 +272,23 @@ export class GardenService {
       });
       const updated = await tx.careReminder.updateMany({
         where: { plantId: id, type: CareType.WATER, enabled: true },
-        data: { scheduledAt, lastNotifiedAt: null },
+        data: {
+          scheduledAt,
+          snoozedUntil: scheduledAt,
+          responseReason: 'BUSY',
+          notificationCount: 0,
+          lastNotifiedAt: null,
+        },
       });
       if (!updated.count) {
         await tx.careReminder.create({
-          data: { plantId: id, type: CareType.WATER, scheduledAt },
+          data: {
+            plantId: id,
+            type: CareType.WATER,
+            scheduledAt,
+            snoozedUntil: scheduledAt,
+            responseReason: 'BUSY',
+          },
         });
       }
     });
@@ -156,6 +298,7 @@ export class GardenService {
       CareAction.NOTE,
       note ?? `Next watering rescheduled to ${scheduledAt.toISOString()}`,
     );
+    this.gardenIntelligence.invalidate(userId);
     return this.ownedPlant(userId, id);
   }
 
@@ -188,11 +331,22 @@ export class GardenService {
       if (dto.type === CareAction.WATER) {
         await tx.careReminder.updateMany({
           where: { plantId: id, type: CareType.WATER, enabled: true },
-          data: { scheduledAt: nextWateringAt, lastNotifiedAt: null },
+          data: {
+            scheduledAt: nextWateringAt,
+            lastNotifiedAt: null,
+            snoozedUntil: null,
+            responseReason: null,
+            notificationCount: 0,
+          },
+        });
+        await tx.notification.updateMany({
+          where: { userId, plantId: id, type: 'CARE_REMINDER', readAt: null },
+          data: { readAt: caredAt },
         });
       }
     });
     await this.intelligence.recordCareEvent(userId, id, dto.type, dto.note);
+    this.gardenIntelligence.invalidate(userId);
     return this.ownedPlant(userId, id);
   }
   async reminders(userId: string, plantId: string): Promise<CareReminder[]> {
@@ -217,7 +371,7 @@ export class GardenService {
         },
       },
       orderBy: { nextWateringAt: 'asc' },
-      take: 50,
+      take: 250,
     });
     const reminders = await Promise.all(
       plants.map((plant) =>

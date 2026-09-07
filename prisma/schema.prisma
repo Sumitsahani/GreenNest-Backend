@@ -70,11 +70,31 @@ enum PlantOutcomeType {
 
 enum EvidenceSource {
   USER_STATEMENT
+  USER_REPORTED
   USER_CORRECTION
   USER_ACTION
   SYSTEM_EVENT
   PLANT_ANALYSIS
   AI_INFERENCE
+  SENSOR_DATA
+}
+
+enum CareSessionStatus {
+  ACTIVE
+  COMPLETED
+  UNDONE
+}
+
+enum CareSessionItemStatus {
+  COMPLETED
+  SKIPPED
+  UNDONE
+}
+
+enum RecoveryCheckpointStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
 }
 
 enum MemoryStatus {
@@ -134,6 +154,8 @@ enum AiFeedbackReason {
   OUTDATED_INFORMATION
   NOT_RELEVANT
   ALREADY_FIXED
+  TOO_GENERIC
+  DIDNT_WORK
   OTHER
 }
 
@@ -372,6 +394,8 @@ model GardenPlant {
   recommendations         PlantRecommendation[]
   memories                AiUserMemory[]
   aiMessages              AiMessage[]
+  careSessionItems        CareSessionItem[]
+  recoveryCheckpoints     RecoveryCheckpoint[]
   newerRelationships      PlantRelationship[]   @relation("NewPlantRelationships")
   historicalRelationships PlantRelationship[]   @relation("HistoricalPlantRelationships")
   createdAt               DateTime              @default(now())
@@ -395,15 +419,18 @@ model CareEvent {
 }
 
 model CareReminder {
-  id             String      @id @default(uuid()) @db.Uuid
-  plantId        String      @db.Uuid
-  type           CareType
-  scheduledAt    DateTime
-  enabled        Boolean     @default(true)
-  lastNotifiedAt DateTime?
-  plant          GardenPlant @relation(fields: [plantId], references: [id], onDelete: Cascade)
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
+  id                String      @id @default(uuid()) @db.Uuid
+  plantId           String      @db.Uuid
+  type              CareType
+  scheduledAt       DateTime
+  enabled           Boolean     @default(true)
+  lastNotifiedAt    DateTime?
+  snoozedUntil      DateTime?
+  responseReason    String?
+  notificationCount Int         @default(0)
+  plant             GardenPlant @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
 
   @@index([plantId, scheduledAt])
   @@index([enabled, scheduledAt])
@@ -498,6 +525,84 @@ model PlantRelationship {
   @@index([userId, previousPlantId])
 }
 
+model CareSession {
+  id          String            @id @default(uuid()) @db.Uuid
+  userId      String            @db.Uuid
+  actionType  CareType
+  source      EvidenceSource    @default(USER_REPORTED)
+  confidence  Decimal           @default(0.8) @db.Decimal(3, 2)
+  status      CareSessionStatus @default(ACTIVE)
+  startedAt   DateTime          @default(now())
+  completedAt DateTime?
+  undoneAt    DateTime?
+  items       CareSessionItem[]
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([userId, status])
+}
+
+model CareSessionItem {
+  id          String                @id @default(uuid()) @db.Uuid
+  sessionId   String                @db.Uuid
+  plantId     String                @db.Uuid
+  status      CareSessionItemStatus
+  caredAt     DateTime?
+  eventId     String?               @db.Uuid
+  careEventId String?               @db.Uuid
+  session     CareSession           @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  plant       GardenPlant           @relation(fields: [plantId], references: [id], onDelete: Restrict)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  @@unique([sessionId, plantId])
+  @@index([plantId, createdAt])
+}
+
+model GardenReview {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @db.Uuid
+  periodStart DateTime
+  periodEnd   DateTime
+  summary     Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, periodStart])
+  @@index([userId, periodEnd])
+}
+
+model RecoveryCheckpoint {
+  id               String                   @id @default(uuid()) @db.Uuid
+  userId           String                   @db.Uuid
+  plantId          String                   @db.Uuid
+  treatmentEventId String                   @db.Uuid
+  dayOffset        Int
+  dueAt            DateTime
+  status           RecoveryCheckpointStatus @default(PENDING)
+  completedAt      DateTime?
+  outcome          PlantOutcomeType?
+  plant            GardenPlant              @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+
+  @@unique([treatmentEventId, dayOffset])
+  @@index([userId, status, dueAt])
+  @@index([plantId, status])
+}
+
+model EngagementEvent {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @db.Uuid
+  name       String
+  properties Json?
+  occurredAt DateTime @default(now())
+
+  @@index([userId, name, occurredAt])
+  @@index([name, occurredAt])
+}
+
 model GardeningService {
   id              String           @id @default(uuid()) @db.Uuid
   slug            String           @unique
@@ -569,6 +674,9 @@ model UserSettings {
   careReminders        Boolean              @default(true)
   offers               Boolean              @default(false)
   pushEnabled          Boolean              @default(true)
+  careTimezone         String               @default("Asia/Kolkata")
+  preferredCareHour    Int                  @default(9)
+  aiLanguage           String               @default("AUTO")
   emailEnabled         Boolean              @default(true)
   notificationAgeGroup NotificationAgeGroup @default(UNSPECIFIED)
   notificationTone     NotificationTone     @default(AUTO)
@@ -598,6 +706,7 @@ model Notification {
   title     String
   message   String
   type      String
+  plantId   String?   @db.Uuid
   readAt    DateTime?
   createdAt DateTime  @default(now())
 
@@ -661,12 +770,13 @@ model SupportMessage {
 }
 
 model AiConversation {
-  id        String      @id @default(uuid()) @db.Uuid
-  userId    String      @map("user_id") @db.Uuid
-  title     String?
-  messages  AiMessage[]
-  createdAt DateTime    @default(now()) @map("created_at")
-  updatedAt DateTime    @updatedAt @map("updated_at")
+  id              String      @id @default(uuid()) @db.Uuid
+  userId          String      @map("user_id") @db.Uuid
+  title           String?
+  activeRequestId String?     @map("active_request_id")
+  messages        AiMessage[]
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
 
   @@index([userId, updatedAt])
   @@map("ai_conversations")

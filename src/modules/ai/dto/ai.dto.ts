@@ -1,5 +1,16 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsNumber, IsOptional, IsString, IsUrl, IsUUID, Length, Max, Min } from 'class-validator';
+import {
+  IsEnum,
+  IsIn,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUrl,
+  IsUUID,
+  Length,
+  Max,
+  Min,
+} from 'class-validator';
 
 export enum MemoryTypeDto {
   PREFERENCE = 'PREFERENCE',
@@ -35,6 +46,18 @@ export class SendAiMessageDto {
   @IsOptional()
   @IsUUID()
   plantId?: string;
+
+  @ApiPropertyOptional({ enum: ['AUTO', 'ENGLISH', 'HINDI'], default: 'AUTO' })
+  @IsOptional()
+  @IsIn(['AUTO', 'ENGLISH', 'HINDI'])
+  language?: 'AUTO' | 'ENGLISH' | 'HINDI';
+
+  @ApiPropertyOptional({
+    description: 'Client request ID used to supersede an outdated generation',
+  })
+  @IsOptional()
+  @IsUUID()
+  requestId?: string;
 }
 
 export class IdentifyPlantDto {
