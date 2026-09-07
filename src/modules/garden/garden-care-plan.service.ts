@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { PlantEnvironment } from '@prisma/client';
 
 export interface GardenCarePlan {
   wateringDays: number;
@@ -8,14 +9,39 @@ export interface GardenCarePlan {
   summerWatering: string;
   normalWatering: string;
   winterWatering: string;
+  recommendedEnvironment: PlantEnvironment;
+  environmentReason: string;
+  indoorRisks: string;
+  indoorAdaptationAdvice: string;
 }
 
 @Injectable()
 export class GardenCarePlanService {
   private readonly logger = new Logger(GardenCarePlanService.name);
 
-  async create(input: { name: string; species?: string; location: string; notes?: string }): Promise<GardenCarePlan> {
+  async create(input: {
+    name: string;
+    species?: string;
+    location: string;
+    environment?: PlantEnvironment;
+    notes?: string;
+  }): Promise<GardenCarePlan> {
     const identity = `${input.name} ${input.species ?? ''}`.toLowerCase();
+    const outdoorPreferred =
+      /rose|rosa|hibiscus|bougainvillea|sunflower|tomato|marigold|jasmine|citrus/.test(identity);
+    const environmentPlan = outdoorPreferred
+      ? {
+          recommendedEnvironment: PlantEnvironment.OUTDOOR,
+          environmentReason: 'This plant normally needs stronger direct sunlight and outdoor airflow to grow and flower well.',
+          indoorRisks: 'Indoors it may become leggy, flower less, stay damp for longer, or attract pests when light and airflow are too low.',
+          indoorAdaptationAdvice: 'Use the sunniest window or balcony door, provide 6+ hours of strong light or a grow light, keep airflow gentle, and water only after checking the soil.',
+        }
+      : {
+          recommendedEnvironment: PlantEnvironment.INDOOR,
+          environmentReason: 'This plant adapts well to protected indoor conditions with suitable light and ventilation.',
+          indoorRisks: 'Low light and overwatering can cause weak growth, yellow leaves, or root problems.',
+          indoorAdaptationAdvice: 'Keep it near suitable natural light, rotate the pot weekly, provide drainage and airflow, and check the soil before watering.',
+        };
     const fallback: GardenCarePlan = /jade|crassula/.test(identity) ? {
       wateringDays: 17,
       idealSunlight: '4-6 hours of bright light; gentle morning sun is ideal',
@@ -24,6 +50,7 @@ export class GardenCarePlanService {
       summerWatering: 'Every 10-14 days, only after soil dries completely',
       normalWatering: 'Every 14-20 days, only after soil dries completely',
       winterWatering: 'Every 20-30+ days, only after soil dries completely',
+      ...environmentPlan,
     } : /spider|chlorophytum/.test(identity) ? {
       wateringDays: 7,
       idealSunlight: '4-6 hours of bright indirect light',
@@ -32,6 +59,7 @@ export class GardenCarePlanService {
       summerWatering: 'Every 4-7 days, after checking topsoil',
       normalWatering: 'Every 7-10 days, after checking topsoil',
       winterWatering: 'Every 10-14 days, after checking topsoil',
+      ...environmentPlan,
     } : /money|pothos|epipremnum/.test(identity) ? {
       wateringDays: 8,
       idealSunlight: '4-6 hours of bright indirect light',
@@ -40,6 +68,7 @@ export class GardenCarePlanService {
       summerWatering: 'Every 5-7 days, after checking topsoil',
       normalWatering: 'Every 7-10 days, after checking topsoil',
       winterWatering: 'Every 10-14 days, after checking topsoil',
+      ...environmentPlan,
     } : {
       wateringDays: 7,
       idealSunlight: 'Bright indirect light, around 4-6 hours daily',
@@ -48,6 +77,7 @@ export class GardenCarePlanService {
       summerWatering: 'Every 7-10 days, after checking the soil',
       normalWatering: 'Every 10-14 days, after checking the soil',
       winterWatering: 'Every 14-21 days, after checking the soil',
+      ...environmentPlan,
     };
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return fallback;
@@ -57,8 +87,8 @@ export class GardenCarePlanService {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: `Create a conservative indoor gardening care plan. Plant name: ${input.name}. Species: ${input.species ?? 'unknown'}. Current location: ${input.location}. Notes: ${input.notes ?? 'none'}. Return JSON only with wateringDays (integer 1-30), idealSunlight, placementAdvice, carePlan (include how dry the soil should be), summerWatering, normalWatering, winterWatering (short intervals like "Every 10-14 days"). Do not claim certainty when species is unknown.` }] }],
-          generationConfig: { temperature: 0.2, responseMimeType: 'application/json', maxOutputTokens: 350 },
+          contents: [{ parts: [{ text: `Create a conservative gardening care plan. Plant name: ${input.name}. Species: ${input.species ?? 'unknown'}. User-selected environment: ${input.environment ?? 'unknown'}. Current placement: ${input.location}. Notes: ${input.notes ?? 'none'}. Return JSON only with wateringDays (integer 1-30), idealSunlight, placementAdvice, carePlan (include how dry the soil should be), summerWatering, normalWatering, winterWatering (short intervals like "Every 10-14 days"), recommendedEnvironment (INDOOR or OUTDOOR), environmentReason, indoorRisks, and indoorAdaptationAdvice. If outdoor is preferred, explain realistic indoor risks and practical changes that can help. Do not claim certainty when species is unknown.` }] }],
+          generationConfig: { temperature: 0.2, responseMimeType: 'application/json', maxOutputTokens: 650 },
         }),
         signal: AbortSignal.timeout(25_000),
       });
@@ -75,6 +105,17 @@ export class GardenCarePlanService {
         summerWatering: String(plan.summerWatering || fallback.summerWatering).slice(0, 100),
         normalWatering: String(plan.normalWatering || fallback.normalWatering).slice(0, 100),
         winterWatering: String(plan.winterWatering || fallback.winterWatering).slice(0, 100),
+        recommendedEnvironment:
+          plan.recommendedEnvironment === PlantEnvironment.OUTDOOR
+            ? PlantEnvironment.OUTDOOR
+            : plan.recommendedEnvironment === PlantEnvironment.INDOOR
+              ? PlantEnvironment.INDOOR
+              : fallback.recommendedEnvironment,
+        environmentReason: String(plan.environmentReason || fallback.environmentReason).slice(0, 400),
+        indoorRisks: String(plan.indoorRisks || fallback.indoorRisks).slice(0, 500),
+        indoorAdaptationAdvice: String(
+          plan.indoorAdaptationAdvice || fallback.indoorAdaptationAdvice,
+        ).slice(0, 600),
       };
     } catch (error) {
       this.logger.warn(`Care plan generation failed; using fallback: ${error instanceof Error ? error.message : 'unknown error'}`);

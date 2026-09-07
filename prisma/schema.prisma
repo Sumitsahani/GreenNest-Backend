@@ -173,6 +173,11 @@ enum PushPlatform {
   IOS
 }
 
+enum PlantEnvironment {
+  INDOOR
+  OUTDOOR
+}
+
 enum NotificationAgeGroup {
   UNSPECIFIED
   UNDER_18
@@ -334,6 +339,11 @@ model GardenPlant {
   name                    String
   species                 String?
   location                String
+  environment             PlantEnvironment      @default(INDOOR)
+  recommendedEnvironment  PlantEnvironment?
+  environmentReason       String?
+  indoorRisks             String?
+  indoorAdaptationAdvice  String?
   weatherLocation         String?
   latitude                Float?
   longitude               Float?
@@ -596,16 +606,21 @@ model Notification {
 }
 
 model PushDevice {
-  id         String       @id @default(uuid()) @db.Uuid
-  userId     String       @db.Uuid
-  token      String       @unique
-  platform   PushPlatform
-  active     Boolean      @default(true)
-  lastSeenAt DateTime     @default(now())
-  createdAt  DateTime     @default(now())
-  updatedAt  DateTime     @updatedAt
+  id                String       @id @default(uuid()) @db.Uuid
+  userId            String       @db.Uuid
+  token             String       @unique
+  platform          PushPlatform
+  locationLabel     String?
+  latitude          Float?
+  longitude         Float?
+  locationUpdatedAt DateTime?
+  active            Boolean      @default(true)
+  lastSeenAt        DateTime     @default(now())
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
 
   @@index([userId, active])
+  @@index([active, latitude, longitude])
 }
 
 model WeatherAlertDelivery {

@@ -51,12 +51,14 @@ export function buildFallbackWeatherNotification(
   facts: WeatherNotificationFacts,
   tone: Exclude<NotificationTone, 'AUTO'>,
 ): NotificationContent {
-  const plants = facts.plantNames.slice(0, 2).join(' & ') || 'Outdoor plants';
+  const hasPlants = facts.plantNames.length > 0;
+  const plants = facts.plantNames.slice(0, 2).join(' & ');
   const rain = Math.round(facts.precipitationMm);
-  const action =
-    facts.recentlyWatered || facts.rainSensitive
-      ? `${plants} ko cover me rakhein; unhe abhi extra paani ki zarurat nahi hai.`
-      : `${plants} ke pots ko cover me rakhein aur drainage check kar lein.`;
+  const action = hasPlants
+    ? facts.recentlyWatered || facts.rainSensitive
+      ? `${plants} ko cover me rakhein; abhi extra paani na dein.`
+      : `${plants} ke pots ko cover me rakhein aur drainage check kar lein.`
+    : 'Bahar jana ho to rain gear rakhein; balcony ki loose cheezein aur drainage check kar lein.';
   const wind = facts.windGustKmh >= 40 ? ' Tez hawa ke liye pots ko secure bhi kar lein.' : '';
 
   if (tone === NotificationTone.PLAYFUL) {

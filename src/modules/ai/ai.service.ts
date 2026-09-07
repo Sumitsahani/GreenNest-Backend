@@ -9,6 +9,7 @@ import { AiMemoryService } from './ai-memory.service';
 import { AiResponseService } from './ai-response.service';
 import { MemoryExtractorService } from './memory-extractor.service';
 import { PlantIntelligenceService } from '../intelligence/plant-intelligence.service';
+import { AiCareActionService, type AiCareUpdate } from './ai-care-action.service';
 
 @Injectable()
 export class AiService {
@@ -19,6 +20,7 @@ export class AiService {
     private readonly context: AiContextService,
     private readonly responses: AiResponseService,
     private readonly intelligence: PlantIntelligenceService,
+    private readonly careActions: AiCareActionService,
   ) {}
 
   createConversation(userId: string, dto: CreateConversationDto): Promise<AiConversation> {
@@ -26,15 +28,25 @@ export class AiService {
   }
 
   listConversations(userId: string): Promise<AiConversation[]> {
-    return this.prisma.aiConversation.findMany({ where: { userId }, orderBy: { updatedAt: 'desc' } });
+    return this.prisma.aiConversation.findMany({
+      where: { userId },
+      orderBy: { updatedAt: 'desc' },
+    });
   }
 
   identifyPlant(imageUrl: string): ReturnType<AiResponseService['identifyPlant']> {
     return this.responses.identifyPlant(imageUrl);
   }
 
-  async briefing(userId: string, weather?: { temperature?: number; humidity?: number; weather?: string }): Promise<{ title: string; message: string; urgentCount: number }> {
-    const plants = await this.prisma.gardenPlant.findMany({ where: { userId }, orderBy: { nextWateringAt: 'asc' }, take: 12 });
+  async briefing(
+    userId: string,
+    weather?: { temperature?: number; humidity?: number; weather?: string },
+  ): Promise<{ title: string; message: string; urgentCount: number }> {
+    const plants = await this.prisma.gardenPlant.findMany({
+      where: { userId },
+      orderBy: { nextWateringAt: 'asc' },
+      take: 12,
+    });
     const now = new Date();
     const due = plants.filter((plant) => plant.nextWateringAt <= now);
     const hottest = (weather?.temperature ?? 0) >= 32;
@@ -43,15 +55,31 @@ export class AiService {
       : due.length
         ? `${due.map((plant) => plant.name.trim()).join(', ')} ${due.length === 1 ? 'is' : 'are'} due for a soil check today.${hottest ? ' Hot weather may dry pots faster, but check soil before watering.' : ''}`
         : `All ${plants.length} plants are on schedule. Next check: ${plants[0]?.name.trim()} on ${plants[0]?.nextWateringAt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}.${weather?.humidity !== undefined && weather.humidity > 75 ? ' High humidity can slow soil drying.' : ''}`;
-    return { title: due.length ? 'Care needed today' : 'Your garden is on track', message, urgentCount: due.length };
+    return {
+      title: due.length ? 'Care needed today' : 'Your garden is on track',
+      message,
+      urgentCount: due.length,
+    };
   }
 
   async messages(userId: string, conversationId: string): Promise<AiMessage[]> {
     await this.assertConversation(userId, conversationId);
-    return this.prisma.aiMessage.findMany({ where: { conversationId }, orderBy: { createdAt: 'asc' } });
+    return this.prisma.aiMessage.findMany({
+      where: { conversationId },
+      orderBy: { createdAt: 'asc' },
+    });
   }
 
-  async send(userId: string, conversationId: string, dto: SendAiMessageDto): Promise<{ userMessage: AiMessage; assistantMessage: AiMessage; memoriesUpdated: number }> {
+  async send(
+    userId: string,
+    conversationId: string,
+    dto: SendAiMessageDto,
+  ): Promise<{
+    userMessage: AiMessage;
+    assistantMessage: AiMessage;
+    memoriesUpdated: number;
+    careUpdate?: AiCareUpdate;
+  }> {
     await this.assertConversation(userId, conversationId);
     const content = dto.message.trim();
     // The first build validates optional plant ownership before any message is
@@ -79,19 +107,22 @@ export class AiService {
         data: { title: content.length > 52 ? `${content.slice(0, 49)}...` : content },
       });
     }
+    const careAction = await this.careActions.apply(userId, dto.plantId, content);
     const extracted = this.extractor.extract(content, dto.plantId);
     if (extracted.length) await this.memories.apply(userId, extracted);
     await this.intelligence.learnFromConversation(userId, dto.plantId, content);
     const context = await this.context.build(userId, content, dto.plantId);
-    const response = await this.responses.generate(
-      content,
-      context,
-      dto.imageUrl,
-      recentHistory.reverse().map((turn) => ({
-        role: turn.role as 'USER' | 'ASSISTANT',
-        content: turn.content,
-      })),
-    );
+    const response =
+      careAction?.reply ??
+      (await this.responses.generate(
+        content,
+        context,
+        dto.imageUrl,
+        recentHistory.reverse().map((turn) => ({
+          role: turn.role as 'USER' | 'ASSISTANT',
+          content: turn.content,
+        })),
+      ));
     const assistantMessage = await this.prisma.aiMessage.create({
       data: {
         conversationId,
@@ -99,15 +130,31 @@ export class AiService {
         content: response,
         plantId: dto.plantId,
         intent: context.intent,
-        sourcesUsed: context.sourcesUsed,
+        sourcesUsed: [...context.sourcesUsed, ...(careAction?.update ? ['chat_care_update'] : [])],
       },
     });
-    await this.prisma.aiConversation.update({ where: { id: conversationId }, data: { updatedAt: new Date() } });
-    return { userMessage, assistantMessage, memoriesUpdated: extracted.length };
+    await this.prisma.aiConversation.update({
+      where: { id: conversationId },
+      data: { updatedAt: new Date() },
+    });
+    return {
+      userMessage,
+      assistantMessage,
+      memoriesUpdated: extracted.length,
+      careUpdate: careAction?.update,
+    };
   }
 
   private async assertConversation(userId: string, id: string): Promise<void> {
-    const conversation = await this.prisma.aiConversation.findFirst({ where: { id, userId }, select: { id: true } });
-    if (!conversation) throw new BusinessException(ErrorCode.NOT_FOUND, 'AI conversation not found', HttpStatus.NOT_FOUND);
+    const conversation = await this.prisma.aiConversation.findFirst({
+      where: { id, userId },
+      select: { id: true },
+    });
+    if (!conversation)
+      throw new BusinessException(
+        ErrorCode.NOT_FOUND,
+        'AI conversation not found',
+        HttpStatus.NOT_FOUND,
+      );
   }
 }

@@ -8,12 +8,29 @@ export class PushDeviceService {
   constructor(private readonly prisma: PrismaService) {}
 
   register(userId: string, dto: PushDeviceDto): Promise<PushDevice> {
+    const hasLocation = typeof dto.latitude === 'number' && typeof dto.longitude === 'number';
     return this.prisma.pushDevice.upsert({
       where: { token: dto.token },
-      create: { userId, token: dto.token, platform: dto.platform },
+      create: {
+        userId,
+        token: dto.token,
+        platform: dto.platform,
+        locationLabel: dto.locationLabel,
+        latitude: dto.latitude,
+        longitude: dto.longitude,
+        locationUpdatedAt: hasLocation ? new Date() : undefined,
+      },
       update: {
         userId,
         platform: dto.platform,
+        ...(hasLocation
+          ? {
+              locationLabel: dto.locationLabel,
+              latitude: dto.latitude,
+              longitude: dto.longitude,
+              locationUpdatedAt: new Date(),
+            }
+          : {}),
         active: true,
         lastSeenAt: new Date(),
       },

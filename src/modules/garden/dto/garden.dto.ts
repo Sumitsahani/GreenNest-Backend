@@ -12,11 +12,15 @@ import {
   MinLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { PlantEnvironment } from '@prisma/client';
 
 export class CreatePlantDto {
   @ApiProperty() @IsString() @MinLength(2) name!: string;
   @ApiProperty({ required: false }) @IsOptional() @IsString() species?: string;
   @ApiProperty() @IsString() @MinLength(2) location!: string;
+  @ApiProperty({ enum: PlantEnvironment })
+  @IsEnum(PlantEnvironment)
+  environment!: PlantEnvironment;
   @ApiProperty({ required: false, description: 'City or area used for this plant weather' })
   @IsOptional()
   @IsString()

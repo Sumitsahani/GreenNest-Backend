@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { PlantEnvironment } from '@prisma/client';
 
 export type SmartWateringStatus =
   'CHECK_NOW' | 'CHECK_EARLIER' | 'DELAY_WATERING' | 'ON_SCHEDULE' | 'LOCATION_NEEDED';
@@ -7,6 +8,7 @@ export interface PlantWeatherInput {
   id: string;
   name: string;
   location: string;
+  environment?: PlantEnvironment;
   weatherLocation: string | null;
   latitude: number | null;
   longitude: number | null;
@@ -77,6 +79,7 @@ interface OpenMeteoGeocoding {
 
 @Injectable()
 export class WeatherCareService {
+  private readonly pendingForecasts = new Map<string, Promise<WeatherSnapshot>>();
   private readonly forecastCache = new Map<string, { expiresAt: number; value: WeatherSnapshot }>();
 
   async resolveLocation(input: {
@@ -94,22 +97,26 @@ export class WeatherCareService {
     }
     if (!label) return null;
     try {
-      const params = new URLSearchParams({ name: label, count: '1', language: 'en' });
-      const response = await this.fetchWithTimeout(
-        `https://geocoding-api.open-meteo.com/v1/search?${params.toString()}`,
-      );
-      if (!response.ok) return null;
-      const result = ((await response.json()) as OpenMeteoGeocoding).results?.[0];
-      if (!result) return null;
-      return {
-        label: [result.name, result.admin1, result.country]
-          .filter((part, index, all): part is string =>
-            Boolean(part && all.indexOf(part) === index),
-          )
-          .join(', '),
-        latitude: result.latitude,
-        longitude: result.longitude,
-      };
+      const candidates = [...new Set([label, label.split(',')[0]!.trim()])];
+      for (const candidate of candidates) {
+        const params = new URLSearchParams({ name: candidate, count: '1', language: 'en' });
+        const response = await this.fetchWithTimeout(
+          `https://geocoding-api.open-meteo.com/v1/search?${params.toString()}`,
+        );
+        if (!response.ok) return null;
+        const result = ((await response.json()) as OpenMeteoGeocoding).results?.[0];
+        if (!result) continue;
+        return {
+          label: [result.name, result.admin1, result.country]
+            .filter((part, index, all): part is string =>
+              Boolean(part && all.indexOf(part) === index),
+            )
+            .join(', '),
+          latitude: result.latitude,
+          longitude: result.longitude,
+        };
+      }
+      return null;
     } catch {
       return null;
     }
@@ -117,10 +124,12 @@ export class WeatherCareService {
 
   async createReminder(input: PlantWeatherInput): Promise<SmartCareReminder> {
     if (input.latitude === null || input.longitude === null) {
-      return this.evaluate(input, null, true);
+      const resolved = await this.resolveLocation({ label: input.weatherLocation ?? undefined });
+      if (!resolved) return this.evaluate(input, null, true);
+      input = { ...input, latitude: resolved.latitude, longitude: resolved.longitude };
     }
     try {
-      const weather = await this.getForecast(input.latitude, input.longitude);
+      const weather = await this.getForecast(input.latitude!, input.longitude!);
       return this.evaluate(input, weather, false);
     } catch {
       return this.evaluate(input, null, false);
@@ -137,7 +146,9 @@ export class WeatherCareService {
       ? new Date(input.lastWateredAt.getTime() + input.wateringDays * 86_400_000)
       : new Date(input.nextWateringAt);
     const daysUntilBase = (base.getTime() - now.getTime()) / 86_400_000;
-    const outdoor = /balcony|terrace|outdoor|garden|patio|roof|veranda/i.test(input.location);
+    const outdoor =
+      input.environment === PlantEnvironment.OUTDOOR ||
+      /balcony|terrace|outdoor|garden|patio|roof|veranda/i.test(input.location);
     let adjustmentDays = 0;
     const signals = ['watering_interval', 'last_watered'];
     let weatherReason = '';
@@ -215,6 +226,17 @@ export class WeatherCareService {
     const key = `${latitude.toFixed(3)},${longitude.toFixed(3)}`;
     const cached = this.forecastCache.get(key);
     if (cached && cached.expiresAt > Date.now()) return cached.value;
+    const pending = this.pendingForecasts.get(key);
+    if (pending) return pending;
+    const request = this.fetchForecast(latitude, longitude).then((value) => {
+      this.forecastCache.set(key, { expiresAt: Date.now() + 15 * 60_000, value });
+      return value;
+    }).finally(() => this.pendingForecasts.delete(key));
+    this.pendingForecasts.set(key, request);
+    return request;
+  }
+
+  private async fetchForecast(latitude: number, longitude: number): Promise<WeatherSnapshot> {
     const params = new URLSearchParams({
       latitude: String(latitude),
       longitude: String(longitude),
@@ -241,18 +263,24 @@ export class WeatherCareService {
       ),
       precipitationProbability: Math.max(...firstThree(data.daily.precipitation_probability_max)),
     };
-    this.forecastCache.set(key, { expiresAt: Date.now() + 15 * 60_000, value });
     return value;
   }
 
   private async fetchWithTimeout(url: string): Promise<Response> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8_000);
-    try {
-      return await fetch(url, { signal: controller.signal });
-    } finally {
-      clearTimeout(timeout);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8_000);
+      try {
+        const response = await fetch(url, { signal: controller.signal });
+        if (response.status >= 500 && attempt === 0) continue;
+        return response;
+      } catch (error) {
+        if (attempt === 1) throw error;
+      } finally {
+        clearTimeout(timeout);
+      }
     }
+    throw new Error('Weather provider unavailable');
   }
 
   private describeWeather(code: number): string {

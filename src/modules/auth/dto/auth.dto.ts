@@ -39,7 +39,7 @@ export class VerifyOtpDto extends RequestOtpDto {
 export class RefreshTokenDto {
   @ApiProperty()
   @IsString()
-  @MinLength(20)
+  @IsNotEmpty()
   refreshToken!: string;
 }
 
