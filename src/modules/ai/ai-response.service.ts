@@ -2,6 +2,13 @@ import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ErrorCode } from '../../common/constants/error-code';
 import { BusinessException } from '../../common/exceptions/business.exception';
 import type { AiContext } from './ai-context.service';
+import {
+  normalizeSpaceAnalysis,
+  openAiSpaceAnalysisSchema,
+  spaceAnalysisPrompt,
+  spaceAnalysisResponseSchema,
+  type SpaceAnalysisResult,
+} from './space-analysis';
 
 export interface ConversationTurn {
   role: 'USER' | 'ASSISTANT';
@@ -95,11 +102,9 @@ const identificationPrompt =
   'First verify whether this is a direct photo of a real living plant. A plant picture printed on a book, document, poster, package, painting, phone, TV, or computer screen is NOT a real plant. Artificial/plastic plants are also NOT real plants. Classify the image medium before identifying species. Set containsRealPlant=true only when a physical living plant is clearly visible. If false or unclear, use Unknown for name/species, keep species confidence below 0.3, and explain the rejection briefly. For a real plant, return a concise common name, scientific species, suitable placement, one care note, whether INDOOR or OUTDOOR is normally recommended, why, realistic risks if kept indoors, and practical steps that can help it adapt indoors. Keep advice concise and conservative.';
 
 const defaultGeminiIdentificationModels = [
-  'gemini-3.7-flash',
-  'gemini-3.5-flash',
-  'gemini-3.1-pro-preview',
   'gemini-3.1-flash-lite',
-  'gemini-2.5-pro',
+  'gemini-3.5-flash',
+  'gemini-3.7-flash',
   'gemini-2.5-flash',
   'gemini-2.5-flash-lite',
 ];
@@ -112,6 +117,23 @@ function configuredModels(value: string | undefined, defaults: string[]): string
     .map((model) => model.trim())
     .filter(Boolean);
   return configured?.length ? [...new Set(configured)] : defaults;
+}
+
+function configuredApiKeys(...values: (string | undefined)[]): string[] {
+  return [
+    ...new Set(
+      values.flatMap((value) =>
+        (value ?? '')
+          .split(',')
+          .map((key) => key.trim())
+          .filter(Boolean),
+      ),
+    ),
+  ];
+}
+
+function geminiApiKeys(): string[] {
+  return configuredApiKeys(process.env.GEMINI_API_KEY, process.env.GEMINI_FALLBACK_API_KEY);
 }
 
 function normalizePlantIdentification(result: Record<string, unknown>): PlantIdentificationResult {
@@ -248,26 +270,232 @@ export class AiResponseService {
     }
   }
 
+  async analyzeSpace(
+    imageUrl: string,
+    declaredType?: string,
+    language: 'ENGLISH' | 'HINDI' = 'ENGLISH',
+  ): Promise<SpaceAnalysisResult> {
+    try {
+      const imagePart = await this.loadImage(imageUrl);
+      const geminiKeys = geminiApiKeys();
+      const openAiKey = process.env.OPENAI_API_KEY;
+      if (!geminiKeys.length && !openAiKey) throw new Error('Space analysis is not configured');
+      const failures: string[] = [];
+      if (geminiKeys.length) {
+        const models = configuredModels(
+          process.env.GEMINI_IDENTIFICATION_MODELS,
+          defaultGeminiIdentificationModels,
+        );
+        for (const [keyIndex, geminiKey] of geminiKeys.entries()) {
+          for (const model of models) {
+            try {
+              return await this.analyzeSpaceWithGemini(
+                imagePart,
+                model,
+                geminiKey,
+                declaredType,
+                language,
+              );
+            } catch (error) {
+              const message = error instanceof Error ? error.message : 'unknown error';
+              const provider = `Gemini ${model} credential ${keyIndex + 1}`;
+              failures.push(`${provider}: ${message}`);
+              this.logger.warn(`Space analysis provider failed: ${provider}: ${message}`);
+            }
+          }
+        }
+      }
+      if (openAiKey) {
+        const models = configuredModels(
+          process.env.OPENAI_VISION_MODELS,
+          defaultOpenAiVisionModels,
+        );
+        for (const model of models) {
+          try {
+            return await this.analyzeSpaceWithOpenAi(
+              imagePart,
+              model,
+              openAiKey,
+              declaredType,
+              language,
+            );
+          } catch (error) {
+            const message = error instanceof Error ? error.message : 'unknown error';
+            failures.push(`OpenAI ${model}: ${message}`);
+            this.logger.warn(`Space analysis provider failed: OpenAI ${model}: ${message}`);
+          }
+        }
+      }
+      throw new Error(`All space analysis models failed: ${failures.join(' | ')}`);
+    } catch (error) {
+      if (error instanceof BusinessException) throw error;
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      this.logger.warn(`Space analysis failed: ${message}`);
+      if (/not configured/i.test(message)) {
+        throw new BusinessException(
+          ErrorCode.SERVICE_UNAVAILABLE,
+          'Space analysis is not configured yet.',
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
+      }
+      if (/HTTP (429|500|502|503|504)|timeout|abort/i.test(message)) {
+        throw new BusinessException(
+          ErrorCode.SERVICE_UNAVAILABLE,
+          'Space analysis is busy right now. Please wait a moment and try again.',
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
+      }
+      if (/too large|image|photo|unsupported|load/i.test(message)) {
+        throw new BusinessException(
+          ErrorCode.AI_ANALYSIS_FAILED,
+          'The space photo could not be read. Please use a clear JPG, PNG, WEBP, HEIC, or HEIF image smaller than 15 MB.',
+          HttpStatus.UNPROCESSABLE_ENTITY,
+        );
+      }
+      throw new BusinessException(
+        ErrorCode.AI_ANALYSIS_FAILED,
+        'The space could not be analyzed confidently. Please take a wider, clearer photo.',
+        HttpStatus.BAD_GATEWAY,
+      );
+    }
+  }
+
+  private async analyzeSpaceWithGemini(
+    imagePart: PlantImagePart,
+    model: string,
+    apiKey: string,
+    declaredType?: string,
+    language: 'ENGLISH' | 'HINDI' = 'ENGLISH',
+  ): Promise<SpaceAnalysisResult> {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [{ text: spaceAnalysisPrompt(declaredType, language) }, imagePart],
+            },
+          ],
+          generationConfig: {
+            responseMimeType: 'application/json',
+            responseSchema: spaceAnalysisResponseSchema,
+            maxOutputTokens: 8192,
+          },
+        }),
+        signal: AbortSignal.timeout(45_000),
+      },
+    );
+    if (!response.ok) {
+      const detail = (await response.text()).replace(/\s+/g, ' ').slice(0, 500);
+      throw new Error(
+        `Gemini space analysis failed: HTTP ${response.status}${detail ? ` - ${detail}` : ''}`,
+      );
+    }
+    const body = (await response.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const text = body.candidates?.[0]?.content?.parts
+      ?.map((part) => part.text ?? '')
+      .join('')
+      .trim();
+    if (!text) throw new Error('Gemini returned an empty space analysis');
+    const normalized = text
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/, '')
+      .trim();
+    return normalizeSpaceAnalysis(JSON.parse(normalized) as Record<string, unknown>, model);
+  }
+
+  private async analyzeSpaceWithOpenAi(
+    imagePart: PlantImagePart,
+    model: string,
+    apiKey: string,
+    declaredType?: string,
+    language: 'ENGLISH' | 'HINDI' = 'ENGLISH',
+  ): Promise<SpaceAnalysisResult> {
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(imagePart.inlineData.mimeType)) {
+      throw new Error(`Unsupported image type ${imagePart.inlineData.mimeType}`);
+    }
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        input: [
+          {
+            role: 'user',
+            content: [
+              { type: 'input_text', text: spaceAnalysisPrompt(declaredType, language) },
+              {
+                type: 'input_image',
+                image_url: `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`,
+                detail: 'high',
+              },
+            ],
+          },
+        ],
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'space_analysis',
+            strict: true,
+            schema: openAiSpaceAnalysisSchema,
+          },
+        },
+        max_output_tokens: 3000,
+      }),
+      signal: AbortSignal.timeout(45_000),
+    });
+    if (!response.ok) {
+      const detail = (await response.text()).replace(/\s+/g, ' ').slice(0, 500);
+      throw new Error(
+        `OpenAI space analysis failed: HTTP ${response.status}${detail ? ` - ${detail}` : ''}`,
+      );
+    }
+    const body = (await response.json()) as {
+      output_text?: string;
+      output?: { content?: { type?: string; text?: string }[] }[];
+    };
+    const text =
+      body.output_text?.trim() ||
+      body.output
+        ?.flatMap((item) => item.content ?? [])
+        .filter((item) => item.type === 'output_text')
+        .map((item) => item.text ?? '')
+        .join('')
+        .trim();
+    if (!text) throw new Error('OpenAI returned an empty space analysis');
+    return normalizeSpaceAnalysis(JSON.parse(text) as Record<string, unknown>, `openai:${model}`);
+  }
+
   private async identifyPlantAcrossProviders(
     imagePart: PlantImagePart,
   ): Promise<PlantIdentificationResult> {
-    const geminiKey = process.env.GEMINI_API_KEY;
+    const geminiKeys = geminiApiKeys();
     const openAiKey = process.env.OPENAI_API_KEY;
-    if (!geminiKey && !openAiKey) throw new Error('Plant recognition is not configured');
+    if (!geminiKeys.length && !openAiKey) throw new Error('Plant recognition is not configured');
 
     const failures: string[] = [];
-    if (geminiKey) {
+    if (geminiKeys.length) {
       const models = configuredModels(
         process.env.GEMINI_IDENTIFICATION_MODELS,
         defaultGeminiIdentificationModels,
       );
-      for (const model of models) {
-        try {
-          return await this.identifyPlantWithGemini(imagePart, model, geminiKey);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'unknown error';
-          failures.push(`Gemini ${model}: ${message}`);
-          this.logger.warn(`Plant identification provider failed: Gemini ${model}: ${message}`);
+      for (const [keyIndex, geminiKey] of geminiKeys.entries()) {
+        for (const model of models) {
+          try {
+            return await this.identifyPlantWithGemini(imagePart, model, geminiKey);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : 'unknown error';
+            const provider = `Gemini ${model} credential ${keyIndex + 1}`;
+            failures.push(`${provider}: ${message}`);
+            this.logger.warn(`Plant identification provider failed: ${provider}: ${message}`);
+          }
         }
       }
     }
@@ -510,8 +738,7 @@ export class AiResponseService {
     const language = preference === 'AUTO' ? detectResponseLanguage(question) : preference;
     const casualReply = friendlySmallTalk(question, language);
     if (casualReply) return casualReply;
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (apiKey) {
+    for (const [keyIndex, apiKey] of geminiApiKeys().entries()) {
       try {
         return await this.generateWithGemini(
           apiKey,
@@ -523,7 +750,7 @@ export class AiResponseService {
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : 'unknown error';
-        this.logger.warn(`Gemini request failed; using local fallback: ${message}`);
+        this.logger.warn(`Gemini credential ${keyIndex + 1} failed; trying fallback: ${message}`);
       }
     }
     return this.generateFallback(question, context, language);
@@ -587,11 +814,10 @@ export class AiResponseService {
   ): Promise<{ inlineData: { mimeType: string; data: string } }> {
     const url = new URL(imageUrl);
     const supabaseHost = new URL(process.env.SUPABASE_URL ?? '').hostname;
-    if (
-      url.protocol !== 'https:' ||
-      url.hostname !== supabaseHost ||
-      !url.pathname.includes('/storage/v1/object/public/user-photos/')
-    ) {
+    const supportedStoragePath =
+      url.pathname.includes('/storage/v1/object/public/user-photos/') ||
+      url.pathname.includes('/storage/v1/object/sign/space-photos/');
+    if (url.protocol !== 'https:' || url.hostname !== supabaseHost || !supportedStoragePath) {
       throw new Error('Unsupported image URL');
     }
     const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });

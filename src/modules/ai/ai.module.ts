@@ -24,6 +24,6 @@ import { GardenModule } from '../garden/garden.module';
     AiCareActionService,
     SupabaseAuthGuard,
   ],
-  exports: [AiService, AiMemoryService],
+  exports: [AiService, AiMemoryService, AiResponseService],
 })
 export class AiModule {}

@@ -240,3 +240,212 @@ describe('AiResponseService plant identification', () => {
     expect(fetchMock.mock.calls[3]?.[0]).toBe('https://api.openai.com/v1/responses');
   });
 });
+
+describe('AiResponseService space analysis', () => {
+  const originalKey = process.env.GEMINI_API_KEY;
+  const originalUrl = process.env.SUPABASE_URL;
+  const originalModels = process.env.GEMINI_IDENTIFICATION_MODELS;
+  const originalFallbackKey = process.env.GEMINI_FALLBACK_API_KEY;
+  const originalOpenAiKey = process.env.OPENAI_API_KEY;
+  const originalOpenAiModels = process.env.OPENAI_VISION_MODELS;
+
+  beforeEach(() => {
+    process.env.GEMINI_API_KEY = 'test-gemini-key-that-is-long-enough';
+    process.env.GEMINI_IDENTIFICATION_MODELS = 'gemini-space-test';
+    process.env.SUPABASE_URL = 'https://project.supabase.co';
+    delete process.env.GEMINI_FALLBACK_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_VISION_MODELS;
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    if (originalKey === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = originalKey;
+    if (originalUrl === undefined) delete process.env.SUPABASE_URL;
+    else process.env.SUPABASE_URL = originalUrl;
+    if (originalModels === undefined) delete process.env.GEMINI_IDENTIFICATION_MODELS;
+    else process.env.GEMINI_IDENTIFICATION_MODELS = originalModels;
+    if (originalFallbackKey === undefined) delete process.env.GEMINI_FALLBACK_API_KEY;
+    else process.env.GEMINI_FALLBACK_API_KEY = originalFallbackKey;
+    if (originalOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = originalOpenAiKey;
+    if (originalOpenAiModels === undefined) delete process.env.OPENAI_VISION_MODELS;
+    else process.env.OPENAI_VISION_MODELS = originalOpenAiModels;
+  });
+
+  it('requests complete structured JSON in the selected language', async () => {
+    const fetchMock = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { 'content-type': 'image/jpeg' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      text: JSON.stringify({
+                        spaceType: 'LIVING_ROOM',
+                        environment: 'INDOOR',
+                        proportions: {
+                          shape: 'BALANCED',
+                          description: 'A balanced room',
+                          confidence: 0.8,
+                        },
+                        objects: [],
+                        surfaces: [],
+                        environmentEstimate: {
+                          naturalLight: 'MEDIUM',
+                          directSunlightPossible: false,
+                          indirectLight: 'MEDIUM',
+                          ventilation: 'UNKNOWN',
+                          windowProximity: 'MODERATE',
+                          basis: 'One window is visible.',
+                          confidence: 0.7,
+                        },
+                        placementZones: [],
+                        confidence: 0.75,
+                        warnings: [],
+                      }),
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      );
+
+    const result = await new AiResponseService().analyzeSpace(
+      'https://project.supabase.co/storage/v1/object/sign/space-photos/user/spaces/room.jpg?token=signed',
+      'LIVING_ROOM',
+      'HINDI',
+    );
+
+    const init = fetchMock.mock.calls[1]?.[1];
+    if (typeof init?.body !== 'string') throw new Error('Expected a JSON request body');
+    const requestBody = JSON.parse(init.body) as {
+      contents: Array<{ parts: Array<{ text?: string }> }>;
+      generationConfig: {
+        responseMimeType: string;
+        responseSchema?: unknown;
+        maxOutputTokens: number;
+      };
+    };
+    expect(requestBody.generationConfig.responseMimeType).toBe('application/json');
+    expect(requestBody.generationConfig.responseSchema).toMatchObject({ type: 'OBJECT' });
+    expect(requestBody.generationConfig.maxOutputTokens).toBe(8192);
+    expect(requestBody.contents[0]?.parts[0]?.text).toContain('simple Hindi');
+    expect(result.spaceType).toBe('LIVING_ROOM');
+  });
+
+  it('falls back to OpenAI vision when Gemini cannot process the image', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key-that-is-long-enough';
+    process.env.OPENAI_VISION_MODELS = 'openai-space-test';
+    const analysisJson = JSON.stringify({
+      spaceType: 'OFFICE',
+      environment: 'INDOOR',
+      proportions: { shape: 'COMPACT', description: 'Office', confidence: 0.8 },
+      objects: [],
+      surfaces: [],
+      environmentEstimate: {
+        naturalLight: 'MEDIUM',
+        directSunlightPossible: false,
+        indirectLight: 'MEDIUM',
+        ventilation: 'UNKNOWN',
+        windowProximity: 'MODERATE',
+        basis: 'A window is visible.',
+        confidence: 0.7,
+      },
+      placementZones: [],
+      confidence: 0.75,
+      warnings: [],
+    });
+    const fetchMock = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { 'content-type': 'image/jpeg' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response('{"error":{"message":"Unable to process input image"}}', {
+          status: 400,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ output_text: analysisJson }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+
+    const result = await new AiResponseService().analyzeSpace(
+      'https://project.supabase.co/storage/v1/object/sign/space-photos/user/spaces/office.jpg?token=signed',
+      'OFFICE',
+    );
+
+    expect(fetchMock.mock.calls[2]?.[0]).toBe('https://api.openai.com/v1/responses');
+    expect(result).toMatchObject({
+      spaceType: 'OFFICE',
+      analysisModel: 'openai:openai-space-test',
+    });
+  });
+
+  it('uses the fallback Gemini credential after the primary credential fails', async () => {
+    process.env.GEMINI_FALLBACK_API_KEY = 'second-test-gemini-key-that-is-long-enough';
+    const responseText = JSON.stringify({
+      spaceType: 'BALCONY',
+      environment: 'OUTDOOR',
+      proportions: { shape: 'COMPACT', description: 'Balcony', confidence: 0.8 },
+      objects: [],
+      surfaces: [],
+      environmentEstimate: {
+        naturalLight: 'DIRECT_SUN',
+        directSunlightPossible: true,
+        indirectLight: 'MEDIUM',
+        ventilation: 'GOOD',
+        windowProximity: 'NEAR',
+        basis: 'Open daylight is visible.',
+        confidence: 0.8,
+      },
+      placementZones: [],
+      confidence: 0.8,
+      warnings: [],
+    });
+    const fetchMock = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { 'content-type': 'image/jpeg' },
+        }),
+      )
+      .mockResolvedValueOnce(new Response('{}', { status: 429 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            candidates: [{ content: { parts: [{ text: responseText }] } }],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      );
+
+    const result = await new AiResponseService().analyzeSpace(
+      'https://project.supabase.co/storage/v1/object/sign/space-photos/user/spaces/balcony.jpg?token=signed',
+      'BALCONY',
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(result.spaceType).toBe('BALCONY');
+  });
+});

@@ -225,6 +225,34 @@ enum SupportMessageSender {
   SYSTEM
 }
 
+enum SpaceAnalysisStatus {
+  ANALYZING
+  COMPLETED
+  FAILED
+}
+
+enum SpaceType {
+  LIVING_ROOM
+  BEDROOM
+  BALCONY
+  OFFICE
+  TERRACE
+  KITCHEN
+  CAFE
+  RESTAURANT
+  RECEPTION
+  SHOP
+  STUDIO
+  OTHER
+  UNKNOWN
+}
+
+enum SpaceEnvironment {
+  INDOOR
+  OUTDOOR
+  UNKNOWN
+}
+
 model Category {
   id        String    @id @default(uuid()) @db.Uuid
   name      String    @unique
@@ -768,6 +796,43 @@ model SupportMessage {
   createdAt      DateTime             @default(now())
 
   @@index([conversationId, createdAt])
+}
+
+model Space {
+  id             String              @id @default(uuid()) @db.Uuid
+  userId         String              @db.Uuid
+  photoPath      String
+  declaredType   SpaceType?
+  detectedType   SpaceType?
+  environment    SpaceEnvironment?
+  analysisStatus SpaceAnalysisStatus @default(ANALYZING)
+  analysisError  String?
+  scene          SpaceScene?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@index([userId, updatedAt])
+  @@index([userId, analysisStatus])
+}
+
+model SpaceScene {
+  id             String   @id @default(uuid()) @db.Uuid
+  spaceId        String   @unique @db.Uuid
+  schemaVersion  Int      @default(1)
+  proportions    Json
+  objects        Json
+  surfaces       Json
+  environment    Json
+  placementZones Json
+  confidence     Decimal  @db.Decimal(3, 2)
+  warnings       String[] @default([])
+  analysisModel  String
+  analyzedAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  space          Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  @@index([analyzedAt])
 }
 
 model AiConversation {
