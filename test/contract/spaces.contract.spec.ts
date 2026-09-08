@@ -41,4 +41,11 @@ describe('Spaces API contract', () => {
       .send({ photoPath: 'fake/spaces/photo.jpg', imageUrl: 'https://example.com/photo.jpg' })
       .expect(401);
   });
+
+  it('protects plant matching behind authentication', async () => {
+    await request(app.getHttpServer())
+      .post('/api/v1/spaces/11111111-1111-4111-8111-111111111111/recommendations')
+      .send({ style: 'MINIMAL', carePreference: 'EASY' })
+      .expect(401);
+  });
 });

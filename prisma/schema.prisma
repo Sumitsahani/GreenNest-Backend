@@ -253,6 +253,25 @@ enum SpaceEnvironment {
   UNKNOWN
 }
 
+enum SpaceDesignStyle {
+  MINIMAL
+  JUNGLE
+  PREMIUM
+  LOW_MAINTENANCE
+}
+
+enum SpaceCarePreference {
+  EASY
+  MODERATE
+  FLEXIBLE
+}
+
+enum MatchConfidence {
+  HIGH
+  MEDIUM
+  LOW
+}
+
 model Category {
   id        String    @id @default(uuid()) @db.Uuid
   name      String    @unique
@@ -265,31 +284,32 @@ model Category {
 }
 
 model Product {
-  id             String         @id @default(uuid()) @db.Uuid
-  slug           String         @unique
-  name           String
-  scientificName String?
-  description    String
-  price          Decimal        @db.Decimal(10, 2)
-  salePrice      Decimal?       @db.Decimal(10, 2)
-  images         String[]
-  rating         Decimal        @default(0) @db.Decimal(2, 1)
-  reviewCount    Int            @default(0)
-  stock          Int            @default(0)
-  petSafe        Boolean        @default(false)
-  height         String?
-  light          String?
-  water          String?
-  difficulty     String?
-  featured       Boolean        @default(false)
-  active         Boolean        @default(true)
-  categoryId     String         @db.Uuid
-  category       Category       @relation(fields: [categoryId], references: [id])
-  wishlistItems  WishlistItem[]
-  cartItems      CartItem[]
-  orderItems     OrderItem[]
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  id                   String                     @id @default(uuid()) @db.Uuid
+  slug                 String                     @unique
+  name                 String
+  scientificName       String?
+  description          String
+  price                Decimal                    @db.Decimal(10, 2)
+  salePrice            Decimal?                   @db.Decimal(10, 2)
+  images               String[]
+  rating               Decimal                    @default(0) @db.Decimal(2, 1)
+  reviewCount          Int                        @default(0)
+  stock                Int                        @default(0)
+  petSafe              Boolean                    @default(false)
+  height               String?
+  light                String?
+  water                String?
+  difficulty           String?
+  featured             Boolean                    @default(false)
+  active               Boolean                    @default(true)
+  categoryId           String                     @db.Uuid
+  category             Category                   @relation(fields: [categoryId], references: [id])
+  wishlistItems        WishlistItem[]
+  cartItems            CartItem[]
+  orderItems           OrderItem[]
+  spaceRecommendations SpacePlantRecommendation[]
+  createdAt            DateTime                   @default(now())
+  updatedAt            DateTime                   @updatedAt
 
   @@index([categoryId, active])
   @@index([active, featured])
@@ -799,20 +819,51 @@ model SupportMessage {
 }
 
 model Space {
-  id             String              @id @default(uuid()) @db.Uuid
-  userId         String              @db.Uuid
-  photoPath      String
-  declaredType   SpaceType?
-  detectedType   SpaceType?
-  environment    SpaceEnvironment?
-  analysisStatus SpaceAnalysisStatus @default(ANALYZING)
-  analysisError  String?
-  scene          SpaceScene?
-  createdAt      DateTime            @default(now())
-  updatedAt      DateTime            @updatedAt
+  id              String                     @id @default(uuid()) @db.Uuid
+  userId          String                     @db.Uuid
+  photoPath       String
+  declaredType    SpaceType?
+  detectedType    SpaceType?
+  environment     SpaceEnvironment?
+  analysisStatus  SpaceAnalysisStatus        @default(ANALYZING)
+  analysisError   String?
+  scene           SpaceScene?
+  recommendations SpacePlantRecommendation[]
+  createdAt       DateTime                   @default(now())
+  updatedAt       DateTime                   @updatedAt
 
   @@index([userId, updatedAt])
   @@index([userId, analysisStatus])
+}
+
+model SpacePlantRecommendation {
+  id               String              @id @default(uuid()) @db.Uuid
+  spaceId          String              @db.Uuid
+  productId        String              @db.Uuid
+  zoneId           String
+  style            SpaceDesignStyle
+  carePreference   SpaceCarePreference
+  rank             Int
+  designScore      Int
+  environmentScore Int
+  lightScore       Int
+  spaceScore       Int
+  careScore        Int
+  preferenceScore  Int
+  overallScore     Int
+  confidence       MatchConfidence
+  reasonEnglish    String
+  reasonHindi      String
+  cautionEnglish   String?
+  cautionHindi     String?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  space            Space               @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  product          Product             @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([spaceId, productId, style, carePreference])
+  @@index([spaceId, style, carePreference, rank])
+  @@index([productId])
 }
 
 model SpaceScene {
