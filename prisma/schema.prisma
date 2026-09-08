@@ -677,6 +677,7 @@ model UserSettings {
   careTimezone         String               @default("Asia/Kolkata")
   preferredCareHour    Int                  @default(9)
   aiLanguage           String               @default("AUTO")
+  appLanguage          String               @default("ENGLISH")
   emailEnabled         Boolean              @default(true)
   notificationAgeGroup NotificationAgeGroup @default(UNSPECIFIED)
   notificationTone     NotificationTone     @default(AUTO)

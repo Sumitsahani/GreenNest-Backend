@@ -11,4 +11,5 @@ export class UpdateSettingsDto {
   @IsOptional() @IsEnum(NotificationAgeGroup) notificationAgeGroup?: NotificationAgeGroup;
   @IsOptional() @IsEnum(NotificationTone) notificationTone?: NotificationTone;
   @IsOptional() @IsIn(['AUTO', 'ENGLISH', 'HINDI']) aiLanguage?: string;
+  @IsOptional() @IsIn(['ENGLISH', 'HINDI']) appLanguage?: string;
 }

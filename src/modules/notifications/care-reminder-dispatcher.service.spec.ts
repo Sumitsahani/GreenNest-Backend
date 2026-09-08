@@ -6,7 +6,14 @@ import { CareReminderDispatcherService } from './care-reminder-dispatcher.servic
 describe('CareReminderDispatcherService', () => {
   beforeEach(() => jest.useFakeTimers().setSystemTime(new Date('2026-09-07T06:00:00Z')));
   afterEach(() => jest.useRealTimers());
-  function setup(options: { claimed?: number; pushEnabled?: boolean; count?: number } = {}) {
+  function setup(
+    options: {
+      claimed?: number;
+      pushEnabled?: boolean;
+      count?: number;
+      appLanguage?: 'ENGLISH' | 'HINDI';
+    } = {},
+  ) {
     const due = new Date('2026-09-06T06:00:00Z');
     const reminder = {
       id: 'reminder-1',
@@ -41,6 +48,7 @@ describe('CareReminderDispatcherService', () => {
           pushEnabled: options.pushEnabled ?? true,
           careTimezone: 'Asia/Kolkata',
           preferredCareHour: 9,
+          appLanguage: options.appLanguage ?? 'ENGLISH',
         }),
       },
       pushDevice: { findMany: devices },
@@ -90,6 +98,16 @@ describe('CareReminderDispatcherService', () => {
     await subject.service.dispatchDueReminders();
     expect(subject.create).toHaveBeenCalled();
     expect(subject.devices).not.toHaveBeenCalled();
+  });
+  it('stores Hindi care copy for a Hindi app preference', async () => {
+    const subject = setup({ appLanguage: 'HINDI' });
+    await subject.service.dispatchDueReminders();
+    expect(subject.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        title: 'Money Plant: देखभाल बाकी है',
+        message: 'Money Plant की मिट्टी जाँचें और सूखी लगे तभी पानी दें।',
+      }),
+    });
   });
   it('stops after three reminders', async () => {
     const subject = setup({ count: 3 });

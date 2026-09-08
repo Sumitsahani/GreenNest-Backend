@@ -1,0 +1,2 @@
+ALTER TABLE "UserSettings"
+ADD COLUMN "appLanguage" TEXT NOT NULL DEFAULT 'ENGLISH';

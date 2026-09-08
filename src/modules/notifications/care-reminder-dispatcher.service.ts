@@ -113,15 +113,24 @@ export class CareReminderDispatcherService
           eligible.push(reminder);
       }
       if (!eligible.length) continue;
+      const hindi = settings?.appLanguage === 'HINDI';
       const title =
         eligible.length === 1
-          ? `${eligible[0]!.plant.name}: care check due`
-          : `${eligible.length} plants need care today`;
+          ? hindi
+            ? `${eligible[0]!.plant.name}: देखभाल बाकी है`
+            : `${eligible[0]!.plant.name}: care check due`
+          : hindi
+            ? `आज ${eligible.length} पौधों की देखभाल करें`
+            : `${eligible.length} plants need care today`;
       const locations = [...new Set(eligible.map((value) => value.plant.location))];
       const message =
         eligible.length === 1
-          ? actionable.get(eligible[0]!.plant.id)!.reason
-          : `Review ${eligible.length} prioritized soil checks${locations.length ? ` in ${locations.slice(0, 2).join(' and ')}` : ''}. Mark only the plants you skipped.`;
+          ? hindi
+            ? `${eligible[0]!.plant.name} की मिट्टी जाँचें और सूखी लगे तभी पानी दें।`
+            : actionable.get(eligible[0]!.plant.id)!.reason
+          : hindi
+            ? `${eligible.length} प्राथमिकता वाली मिट्टी की जाँच करें${locations.length ? ` — ${locations.slice(0, 2).join(' और ')}` : ''}। केवल छोड़े गए पौधों को चिह्नित करें।`
+            : `Review ${eligible.length} prioritized soil checks${locations.length ? ` in ${locations.slice(0, 2).join(' and ')}` : ''}. Mark only the plants you skipped.`;
       const claimedIds = await this.prisma.$transaction(async (tx) => {
         const ids: string[] = [];
         for (const reminder of eligible) {
