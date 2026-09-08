@@ -244,14 +244,14 @@ describe('AiResponseService plant identification', () => {
 describe('AiResponseService space analysis', () => {
   const originalKey = process.env.GEMINI_API_KEY;
   const originalUrl = process.env.SUPABASE_URL;
-  const originalModels = process.env.GEMINI_IDENTIFICATION_MODELS;
+  const originalModels = process.env.GEMINI_SPACE_MODELS;
   const originalFallbackKey = process.env.GEMINI_FALLBACK_API_KEY;
   const originalOpenAiKey = process.env.OPENAI_API_KEY;
   const originalOpenAiModels = process.env.OPENAI_VISION_MODELS;
 
   beforeEach(() => {
     process.env.GEMINI_API_KEY = 'test-gemini-key-that-is-long-enough';
-    process.env.GEMINI_IDENTIFICATION_MODELS = 'gemini-space-test';
+    process.env.GEMINI_SPACE_MODELS = 'gemini-space-test';
     process.env.SUPABASE_URL = 'https://project.supabase.co';
     delete process.env.GEMINI_FALLBACK_API_KEY;
     delete process.env.OPENAI_API_KEY;
@@ -264,8 +264,8 @@ describe('AiResponseService space analysis', () => {
     else process.env.GEMINI_API_KEY = originalKey;
     if (originalUrl === undefined) delete process.env.SUPABASE_URL;
     else process.env.SUPABASE_URL = originalUrl;
-    if (originalModels === undefined) delete process.env.GEMINI_IDENTIFICATION_MODELS;
-    else process.env.GEMINI_IDENTIFICATION_MODELS = originalModels;
+    if (originalModels === undefined) delete process.env.GEMINI_SPACE_MODELS;
+    else process.env.GEMINI_SPACE_MODELS = originalModels;
     if (originalFallbackKey === undefined) delete process.env.GEMINI_FALLBACK_API_KEY;
     else process.env.GEMINI_FALLBACK_API_KEY = originalFallbackKey;
     if (originalOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
@@ -341,7 +341,7 @@ describe('AiResponseService space analysis', () => {
       };
     };
     expect(requestBody.generationConfig.responseMimeType).toBe('application/json');
-    expect(requestBody.generationConfig.responseSchema).toMatchObject({ type: 'OBJECT' });
+    expect(requestBody.generationConfig.responseSchema).toBeUndefined();
     expect(requestBody.generationConfig.maxOutputTokens).toBe(8192);
     expect(requestBody.contents[0]?.parts[0]?.text).toContain('simple Hindi');
     expect(result.spaceType).toBe('LIVING_ROOM');

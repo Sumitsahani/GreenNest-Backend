@@ -6,7 +6,6 @@ import {
   normalizeSpaceAnalysis,
   openAiSpaceAnalysisSchema,
   spaceAnalysisPrompt,
-  spaceAnalysisResponseSchema,
   type SpaceAnalysisResult,
 } from './space-analysis';
 
@@ -102,11 +101,18 @@ const identificationPrompt =
   'First verify whether this is a direct photo of a real living plant. A plant picture printed on a book, document, poster, package, painting, phone, TV, or computer screen is NOT a real plant. Artificial/plastic plants are also NOT real plants. Classify the image medium before identifying species. Set containsRealPlant=true only when a physical living plant is clearly visible. If false or unclear, use Unknown for name/species, keep species confidence below 0.3, and explain the rejection briefly. For a real plant, return a concise common name, scientific species, suitable placement, one care note, whether INDOOR or OUTDOOR is normally recommended, why, realistic risks if kept indoors, and practical steps that can help it adapt indoors. Keep advice concise and conservative.';
 
 const defaultGeminiIdentificationModels = [
+  'gemini-3.6-flash',
+  'gemini-3.5-flash-lite',
   'gemini-3.1-flash-lite',
   'gemini-3.5-flash',
   'gemini-3.7-flash',
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
+];
+
+const defaultGeminiSpaceModels = [
+  'gemini-3.6-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-3.5-flash',
+  'gemini-3.1-flash-lite',
 ];
 
 const defaultOpenAiVisionModels = ['gpt-5.6-luna', 'gpt-5.6-terra'];
@@ -282,10 +288,7 @@ export class AiResponseService {
       if (!geminiKeys.length && !openAiKey) throw new Error('Space analysis is not configured');
       const failures: string[] = [];
       if (geminiKeys.length) {
-        const models = configuredModels(
-          process.env.GEMINI_IDENTIFICATION_MODELS,
-          defaultGeminiIdentificationModels,
-        );
+        const models = configuredModels(process.env.GEMINI_SPACE_MODELS, defaultGeminiSpaceModels);
         for (const [keyIndex, geminiKey] of geminiKeys.entries()) {
           for (const model of models) {
             try {
@@ -380,7 +383,6 @@ export class AiResponseService {
           ],
           generationConfig: {
             responseMimeType: 'application/json',
-            responseSchema: spaceAnalysisResponseSchema,
             maxOutputTokens: 8192,
           },
         }),
@@ -764,7 +766,7 @@ export class AiResponseService {
     imageUrl?: string,
     history: ConversationTurn[] = [],
   ): Promise<string> {
-    const model = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash';
+    const model = process.env.GEMINI_MODEL ?? 'gemini-3.5-flash-lite';
     const imagePart = imageUrl ? await this.loadImage(imageUrl) : undefined;
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
