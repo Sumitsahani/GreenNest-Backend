@@ -17,6 +17,7 @@ export const environmentValidationSchema = Joi.object({
   THROTTLE_TTL_MS: Joi.number().integer().positive().default(60000),
   THROTTLE_LIMIT: Joi.number().integer().positive().default(100),
   GEMINI_API_KEY: Joi.string().min(20).optional(),
+  GEMINI_FALLBACK_API_KEY: Joi.string().min(20).optional(),
   GEMINI_MODEL: Joi.string().default('gemini-2.5-flash'),
   GEMINI_IDENTIFICATION_MODELS: Joi.string().optional(),
   OPENAI_API_KEY: Joi.string().min(20).optional(),

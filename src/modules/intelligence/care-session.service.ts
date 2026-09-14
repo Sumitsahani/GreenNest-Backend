@@ -281,6 +281,8 @@ export class CareSessionService {
       'plant_history_opened',
       'space_design_to_plant_addition',
       'space_design_commerce_intent',
+      'space_photo_uploaded',
+      'space_analysis_completed',
     ]);
     if (!allowed.has(name))
       throw new BusinessException(
