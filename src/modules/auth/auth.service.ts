@@ -17,7 +17,7 @@ export class AuthService {
   private readonly url: string;
   private readonly apiKey: string;
 
-  constructor(config: ConfigService) {
+  constructor(private readonly config: ConfigService) {
     this.url = config.getOrThrow<string>('SUPABASE_URL');
     this.apiKey = config.getOrThrow<string>('SUPABASE_PUBLISHABLE_KEY');
   }
@@ -38,6 +38,34 @@ export class AuthService {
       user: this.mapUser(user),
       session,
     };
+  }
+
+  async sessionForVerifiedEmail(email: string): Promise<AuthSessionResponse> {
+    const key = this.config.getOrThrow<string>('SUPABASE_SERVICE_ROLE_KEY');
+    const link = await this.supabaseRequest<{ hashed_token: string; verification_type: string }>(
+      '/auth/v1/admin/generate_link',
+      {
+        method: 'POST',
+        headers: { apikey: key, Authorization: `Bearer ${key}` },
+        body: JSON.stringify({ type: 'magiclink', email }),
+      },
+      ErrorCode.AUTH_PROVIDER_ERROR,
+    );
+    if (!link.hashed_token || !['magiclink', 'signup'].includes(link.verification_type))
+      throw new BusinessException(
+        ErrorCode.AUTH_PROVIDER_ERROR,
+        'Unable to create a session. Request a new verification code.',
+        HttpStatus.BAD_GATEWAY,
+      );
+    const session = await this.supabaseRequest<SupabaseSession>(
+      '/auth/v1/verify',
+      {
+        method: 'POST',
+        body: JSON.stringify({ token_hash: link.hashed_token, type: link.verification_type }),
+      },
+      ErrorCode.AUTH_PROVIDER_ERROR,
+    );
+    return this.mapSession(session);
   }
 
   async loginWithEmail(email: string, password: string): Promise<AuthSessionResponse> {
@@ -122,6 +150,7 @@ export class AuthService {
     try {
       response = await fetch(`${this.url}${path}`, {
         ...init,
+        signal: AbortSignal.timeout(10_000),
         headers: { apikey: this.apiKey, 'Content-Type': 'application/json', ...init.headers },
       });
     } catch {
@@ -132,6 +161,12 @@ export class AuthService {
       );
     }
     if (!response.ok) {
+      if (response.status >= 500 || response.status === 429)
+        throw new BusinessException(
+          ErrorCode.AUTH_PROVIDER_ERROR,
+          'Authentication service is temporarily unavailable. Please retry.',
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
       const unauthorized =
         code === ErrorCode.UNAUTHORIZED || code === ErrorCode.EMAIL_SIGN_IN_FAILED;
       throw new BusinessException(
@@ -172,6 +207,18 @@ export class AuthService {
   }
 
   private mapSession(session: SupabaseSession): AuthSessionResponse {
+    if (
+      !session ||
+      typeof session.access_token !== 'string' ||
+      typeof session.refresh_token !== 'string' ||
+      typeof session.expires_in !== 'number' ||
+      typeof session.user?.id !== 'string'
+    )
+      throw new BusinessException(
+        ErrorCode.AUTH_PROVIDER_ERROR,
+        'Authentication service returned an invalid session',
+        HttpStatus.BAD_GATEWAY,
+      );
     return {
       accessToken: session.access_token,
       refreshToken: session.refresh_token,

@@ -6,6 +6,7 @@ import { SupabaseAuthGuard } from '../../common/auth/supabase-auth.guard';
 import {
   AddCareEventDto,
   CreatePlantDto,
+  UpdatePlantDto,
   CreateReminderDto,
   UpdateReminderDto,
   RespondCareDto,
@@ -75,6 +76,13 @@ export class GardenController {
     @Param('id') id: string,
   ): Promise<{ deleted: true }> {
     return this.garden.remove(user.id, id);
+  }
+  @Patch(':id') update(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: UpdatePlantDto,
+  ): Promise<GardenPlantResponse> {
+    return this.garden.update(user.id, id, dto);
   }
   @Post(':id/care-events') care(
     @CurrentUser() user: AuthenticatedUser,

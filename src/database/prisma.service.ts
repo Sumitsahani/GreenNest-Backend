@@ -15,13 +15,24 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnAppli
 
   async onModuleInit(): Promise<void> {
     if (!this.configService.get<boolean>('databaseConnectOnStartup')) return;
-    await this.$connect();
-    this.connected = true;
-    this.logger.log('PostgreSQL connection established');
+    const attempts = this.configService.get<number>('DATABASE_CONNECT_ATTEMPTS', 3);
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        await this.$connect();
+        this.connected = true;
+        this.logger.log('PostgreSQL connection established');
+        return;
+      } catch (error) {
+        const code = error && typeof error === 'object' && 'errorCode' in error ? String(error.errorCode) : '';
+        if (!['P1001', 'P1002'].includes(code) || attempt === attempts) throw error;
+        this.logger.warn(`Database connection ${code}; retrying startup (${attempt}/${attempts}).`);
+        await new Promise(resolve => setTimeout(resolve, attempt * 500));
+      }
+    }
   }
 
   async onApplicationShutdown(): Promise<void> {
-    if (this.connected) await this.$disconnect();
+    await this.$disconnect();
   }
 
   isConnected(): boolean {

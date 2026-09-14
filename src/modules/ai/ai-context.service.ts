@@ -4,7 +4,10 @@ import { PrismaService } from '../../database/prisma.service';
 import { PlantStateService } from '../intelligence/plant-state.service';
 import { UserGardeningProfileService } from '../intelligence/user-gardening-profile.service';
 import { AiMemoryService } from './ai-memory.service';
-import { QuestionUnderstandingService, type PlantQuestionIntent } from './question-understanding.service';
+import {
+  QuestionUnderstandingService,
+  type PlantQuestionIntent,
+} from './question-understanding.service';
 
 export interface AiContext {
   garden: Pick<GardenPlant, 'name' | 'species' | 'location' | 'health' | 'nextWateringAt'>[];
@@ -42,15 +45,18 @@ export class AiContextService {
       this.profiles.build(userId),
     ]);
     const historicalPlants = plantState
-      ? profile.historicalPlants.filter(
-          (plant) =>
-            plant.id !== plantState.identity.id &&
-            Boolean(plant.species) &&
-            plant.species?.toLowerCase() === plantState.identity.species?.toLowerCase(),
-        ).slice(0, 4)
+      ? profile.historicalPlants
+          .filter(
+            (plant) =>
+              plant.id !== plantState.identity.id &&
+              Boolean(plant.species) &&
+              plant.species?.toLowerCase() === plantState.identity.species?.toLowerCase(),
+          )
+          .slice(0, 4)
       : [];
     const gardenLines = garden.map(
-      (plant) => `${plant.name}${plant.species ? ` (${plant.species})` : ''}: ${plant.location}, health ${plant.health}/100, next water ${plant.nextWateringAt.toISOString().slice(0, 10)}`,
+      (plant) =>
+        `${plant.name}${plant.species ? ` (${plant.species})` : ''}: ${plant.location}, health ${plant.health}/100, scheduled soil check (not a watering instruction) ${plant.nextWateringAt.toISOString().slice(0, 10)}`,
     );
     const memoryLines = memories.map(
       (item) =>
@@ -60,19 +66,69 @@ export class AiContextService {
       ? [
           `${plantState.identity.name}${plantState.identity.species ? ` (${plantState.identity.species})` : ''}`,
           `lifecycle=${plantState.lifecycleStatus}, location=${plantState.location}, health=${plantState.health}/100`,
+          `dateAdded=${plantState.identity.dateAdded.toISOString()} (not plant age)`,
+          `speciesPlacementGuidance=${JSON.stringify(plantState.environment)} (not measured light or environment)`,
+          `recordedCare=${JSON.stringify(
+            [
+              ...plantState.wateringHistory.slice(0, 5),
+              ...plantState.fertilizingHistory.slice(0, 3),
+              ...plantState.repottingHistory.slice(0, 3),
+            ].map(({ type, note, caredAt }) => ({ type, note, caredAt })),
+          )}`,
+          `recordedHealthAndTreatments=${JSON.stringify(
+            [
+              ...plantState.healthHistory.slice(0, 6),
+              ...plantState.treatments.slice(0, 4),
+              ...plantState.movementHistory.slice(0, 3),
+            ].map(({ type, value, note, source, confidence, occurredAt }) => ({
+              type,
+              value,
+              note,
+              source,
+              confidence,
+              occurredAt,
+            })),
+          )}`,
+          `photoAnalysisRecords=${JSON.stringify(
+            plantState.recentPhotos
+              .slice(0, 3)
+              .map(({ analysis, source, createdAt }) => ({ analysis, source, createdAt })),
+          )} (metadata only; photos are not attached here)`,
           `lastWatered=${plantState.lastWateredAt?.toISOString() ?? 'unknown'}, nextWatering=${plantState.nextWateringAt.toISOString()}`,
-          `learnedSignals=${plantState.learnedSignals
-            .slice(0, 5)
-            .map((signal) => `${signal.key}:${signal.value}[${signal.source},${signal.confidence.toFixed(2)}]`)
-            .join('; ') || 'none'}`,
-          `recentRecommendations=${plantState.recommendations
-            .slice(0, 3)
-            .map((recommendation) => `${recommendation.action}:${recommendation.status}`)
-            .join('; ') || 'none'}`,
-          `recentOutcomes=${plantState.outcomes
-            .slice(0, 3)
-            .map((outcome) => `${outcome.outcome}${outcome.reason ? `:${outcome.reason}` : ''}[${outcome.source},${Number(outcome.confidence).toFixed(2)}]`)
-            .join('; ') || 'none'}`,
+          `learnedSignals=${
+            plantState.learnedSignals
+              .slice(0, 5)
+              .map(
+                (signal) =>
+                  `${signal.key}:${signal.value}[${signal.source},${signal.confidence.toFixed(2)}]`,
+              )
+              .join('; ') || 'none'
+          }`,
+          `recentRecommendations=${
+            plantState.recommendations
+              .slice(0, 3)
+              .map((recommendation) =>
+                JSON.stringify({
+                  action: recommendation.action,
+                  status: recommendation.status,
+                  reason: recommendation.reason,
+                  createdAt: recommendation.createdAt,
+                  completedAt: recommendation.completedAt,
+                  outcome: recommendation.outcome,
+                  outcomeNote: recommendation.outcomeNote,
+                }),
+              )
+              .join('; ') || 'none'
+          }`,
+          `recentOutcomes=${
+            plantState.outcomes
+              .slice(0, 3)
+              .map(
+                (outcome) =>
+                  `${outcome.recordedAt.toISOString()}: ${outcome.outcome}${outcome.reason ? `:${outcome.reason}` : ''}[${outcome.source},${Number(outcome.confidence).toFixed(2)}]`,
+              )
+              .join('; ') || 'none'
+          }`,
         ]
       : ['No explicit current plant was supplied.'];
     const historyLines = historicalPlants.flatMap((plant) =>
@@ -83,13 +139,19 @@ export class AiContextService {
           )
         : [`${plant.name}: previous same-species plant; no recorded outcome`],
     );
-    const patternLines = profile.carePatterns.slice(0, 5).map(
-      (pattern) => `${pattern.key}: ${pattern.value} [confidence=${pattern.confidence.toFixed(2)}]`,
-    );
+    const patternLines = profile.carePatterns
+      .slice(0, 5)
+      .map(
+        (pattern) =>
+          `${pattern.key}: ${pattern.value} [confidence=${pattern.confidence.toFixed(2)}]`,
+      );
     const sourcesUsed = [
       ...(plantState ? ['current_plant_state', 'watering_history'] : []),
       ...(plantState?.recommendations.length ? ['recent_recommendations'] : []),
       ...(plantState?.outcomes.length ? ['plant_outcomes'] : []),
+      ...(plantState?.healthHistory.length ? ['plant_health_history'] : []),
+      ...(plantState?.treatments.length ? ['plant_treatments'] : []),
+      ...(plantState?.recentPhotos.length ? ['photo_analysis_records'] : []),
       ...(memories.length ? ['relevant_memory'] : []),
       ...(historicalPlants.length ? ['same_species_history'] : []),
       ...(patternLines.length ? ['user_patterns'] : []),
@@ -102,6 +164,8 @@ export class AiContextService {
       plantId: plantId ?? null,
       sourcesUsed,
       promptContext: [
+        `CURRENT TIME (UTC): ${new Date().toISOString()}`,
+        'Weather, soil moisture, pot details, and actual light are unknown unless explicitly recorded below or supplied by the user. Schedule dates alone do not justify watering.',
         `QUESTION INTENT: ${intent}`,
         'CURRENT PLANT STATE (primary evidence):',
         currentPlantLines.join('\n'),

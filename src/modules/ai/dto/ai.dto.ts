@@ -10,6 +10,9 @@ import {
   Length,
   Max,
   Min,
+  IsArray,
+  ArrayMinSize,
+  ArrayMaxSize,
 } from 'class-validator';
 
 export enum MemoryTypeDto {
@@ -34,8 +37,17 @@ export class CreateConversationDto {
 export class SendAiMessageDto {
   @ApiProperty({ example: 'I have a sunny balcony and prefer low-maintenance plants.' })
   @IsString()
-  @Length(2, 4000)
+  @Length(1, 4000)
   message!: string;
+
+  @ApiPropertyOptional({ type: [String], description: 'Original user messages, in order' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  @Length(1, 4000, { each: true })
+  messages?: string[];
 
   @ApiPropertyOptional({ description: 'A GreenNest Supabase Storage plant photo URL' })
   @IsOptional()

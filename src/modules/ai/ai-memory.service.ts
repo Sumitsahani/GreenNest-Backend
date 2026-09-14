@@ -37,16 +37,19 @@ export class AiMemoryService {
       },
     });
     const existingByKey = new Map(
-      existing.map((memory) => [
-        `${memory.scopeKey}:${memory.memoryKey}`,
-        memory,
-      ]),
+      existing.map((memory) => [`${memory.scopeKey}:${memory.memoryKey}`, memory]),
     );
     const operations: Prisma.PrismaPromise<unknown>[] = [];
 
     for (const memory of memories) {
       const scopeKey = scopeFor(memory);
       const previous = existingByKey.get(`${scopeKey}:${memory.key}`);
+      if (
+        previous?.source === EvidenceSource.USER_CORRECTION &&
+        (memory.source === EvidenceSource.AI_INFERENCE ||
+          memory.source === EvidenceSource.PLANT_ANALYSIS)
+      )
+        continue;
       if (memory.operation === 'delete') {
         operations.push(
           this.prisma.aiUserMemory.updateMany({
@@ -117,7 +120,12 @@ export class AiMemoryService {
     await this.prisma.$transaction(operations);
   }
 
-  async relevant(userId: string, query: string, limit = 6, plantId?: string): Promise<AiUserMemory[]> {
+  async relevant(
+    userId: string,
+    query: string,
+    limit = 6,
+    plantId?: string,
+  ): Promise<AiUserMemory[]> {
     const types = this.relevantTypes(query);
     const memories = await this.prisma.aiUserMemory.findMany({
       where: {
@@ -156,7 +164,11 @@ export class AiMemoryService {
       });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        throw new BusinessException(ErrorCode.RESOURCE_ALREADY_EXISTS, 'Memory key already exists', HttpStatus.CONFLICT);
+        throw new BusinessException(
+          ErrorCode.RESOURCE_ALREADY_EXISTS,
+          'Memory key already exists',
+          HttpStatus.CONFLICT,
+        );
       }
       throw error;
     }
@@ -201,19 +213,27 @@ export class AiMemoryService {
   }
 
   private async assertOwned(userId: string, id: string): Promise<void> {
-    const memory = await this.prisma.aiUserMemory.findFirst({ where: { id, userId }, select: { id: true } });
-    if (!memory) throw new BusinessException(ErrorCode.NOT_FOUND, 'AI memory not found', HttpStatus.NOT_FOUND);
+    const memory = await this.prisma.aiUserMemory.findFirst({
+      where: { id, userId },
+      select: { id: true },
+    });
+    if (!memory)
+      throw new BusinessException(ErrorCode.NOT_FOUND, 'AI memory not found', HttpStatus.NOT_FOUND);
   }
 
   private relevantTypes(query: string): AiMemoryType[] {
     const q = query.toLowerCase();
     const types = new Set<AiMemoryType>();
     if (/buy|shop|price|budget|recommend/.test(q)) types.add(AiMemoryType.SHOPPING_PREFERENCE);
-    if (/water|fertili|prun|repot|care|maintenance/.test(q)) types.add(AiMemoryType.CARE_PREFERENCE);
-    if (/soil|wet|dry|symptom|yellow|root|rot|health/.test(q)) types.add(AiMemoryType.PLANT_OBSERVATION);
-    if (/mistake|usually|often|always|pattern|previous/.test(q)) types.add(AiMemoryType.USER_PATTERN);
+    if (/water|fertili|prun|repot|care|maintenance/.test(q))
+      types.add(AiMemoryType.CARE_PREFERENCE);
+    if (/soil|wet|dry|symptom|yellow|root|rot|health/.test(q))
+      types.add(AiMemoryType.PLANT_OBSERVATION);
+    if (/mistake|usually|often|always|pattern|previous/.test(q))
+      types.add(AiMemoryType.USER_PATTERN);
     if (/plant|flower|herb|vegetable|seed/.test(q)) types.add(AiMemoryType.PLANT_PREFERENCE);
-    if (/sun|light|balcony|indoor|outdoor|space|weather/.test(q)) types.add(AiMemoryType.ENVIRONMENT);
+    if (/sun|light|balcony|indoor|outdoor|space|weather/.test(q))
+      types.add(AiMemoryType.ENVIRONMENT);
     if (/beginner|easy|difficult|experience|learn/.test(q)) types.add(AiMemoryType.EXPERIENCE);
     if (/goal|plan|start|grow/.test(q)) types.add(AiMemoryType.GOAL);
     return [...types];

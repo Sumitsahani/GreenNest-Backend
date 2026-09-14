@@ -63,6 +63,7 @@ export class RewardsService {
     if (!reward)
       throw new BusinessException(ErrorCode.NOT_FOUND, 'Reward not found', HttpStatus.NOT_FOUND);
     return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`rewards:${userId}`}, 0))::text`;
       const aggregate = await tx.rewardTransaction.aggregate({
         where: { userId },
         _sum: { points: true },

@@ -13,7 +13,7 @@ export class ServicesController {
   @Get('services') list(): Promise<ServiceResponse[]> {
     return this.services.list();
   }
-  @Get('services/slots') slots(@Query('date') date: string): SlotResponse[] {
+  @Get('services/slots') slots(@Query('date') date: string): Promise<SlotResponse[]> {
     return this.services.slots(date);
   }
   @Get('services/:id') detail(@Param('id') id: string): Promise<ServiceResponse> {

@@ -1,5 +1,12 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { CareType, PlantLifecycleStatus, Prisma, type CareReminder } from '@prisma/client';
+import {
+  CareType,
+  PlantLifecycleStatus,
+  PlantEventType,
+  EvidenceSource,
+  Prisma,
+  type CareReminder,
+} from '@prisma/client';
 import { ErrorCode } from '../../common/constants/error-code';
 import { BusinessException } from '../../common/exceptions/business.exception';
 import { PrismaService } from '../../database/prisma.service';
@@ -10,6 +17,7 @@ import {
   type CareTimingDto,
   type AddCareEventDto,
   type CreatePlantDto,
+  type UpdatePlantDto,
   type CreateReminderDto,
 } from './dto/garden.dto';
 import { GardenCarePlanService } from './garden-care-plan.service';
@@ -126,6 +134,30 @@ export class GardenService {
     });
     this.gardenIntelligence.invalidate(userId);
     return { deleted: true };
+  }
+  async update(userId: string, id: string, dto: UpdatePlantDto): Promise<GardenPlantResponse> {
+    await this.ownedPlant(userId, id);
+    const result = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.gardenPlant.update({
+        where: { id, userId },
+        data: dto,
+        include: { careEvents: { orderBy: { caredAt: 'desc' } } },
+      });
+      await tx.plantEvent.create({
+        data: {
+          userId,
+          plantId: id,
+          type: PlantEventType.USER_NOTE,
+          eventKey: 'plant_details_corrected',
+          source: EvidenceSource.USER_CORRECTION,
+          confidence: 1,
+          value: { ...dto },
+        },
+      });
+      return updated;
+    });
+    this.gardenIntelligence.invalidate(userId);
+    return result;
   }
   async care(userId: string, id: string, dto: AddCareEventDto): Promise<GardenPlantResponse> {
     return this.recordCareAt(userId, id, dto, new Date());
@@ -324,11 +356,19 @@ export class GardenService {
             ? {
                 nextWateringAt,
                 lastWateredAt: caredAt,
-                health: Math.min(100, plant.health + 3),
               }
             : {},
       });
       if (dto.type === CareAction.WATER) {
+        await tx.plantRecommendation.updateMany({
+          where: {
+            userId,
+            plantId: id,
+            action: 'WATER',
+            status: { in: ['GENERATED', 'SHOWN', 'ACCEPTED'] },
+          },
+          data: { status: 'COMPLETED', completedAt: caredAt, respondedAt: caredAt },
+        });
         await tx.careReminder.updateMany({
           where: { plantId: id, type: CareType.WATER, enabled: true },
           data: {
@@ -344,8 +384,8 @@ export class GardenService {
           data: { readAt: caredAt },
         });
       }
+      await this.intelligence.recordCareEvent(userId, id, dto.type, dto.note, tx, caredAt);
     });
-    await this.intelligence.recordCareEvent(userId, id, dto.type, dto.note);
     this.gardenIntelligence.invalidate(userId);
     return this.ownedPlant(userId, id);
   }

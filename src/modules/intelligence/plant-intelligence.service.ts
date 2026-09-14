@@ -183,7 +183,7 @@ export class PlantIntelligenceService {
             userId,
             plantId,
             type: PlantEventType.IDENTIFIED,
-            source: EvidenceSource.PLANT_ANALYSIS,
+            source: EvidenceSource.USER_STATEMENT,
             value: { species: input.species },
           },
         }),
@@ -213,6 +213,8 @@ export class PlantIntelligenceService {
     plantId: string,
     careType: string,
     note?: string,
+    client: Prisma.TransactionClient = this.prisma,
+    occurredAt = new Date(),
   ): Promise<void> {
     const typeByCare: Record<string, PlantEventType> = {
       WATER: PlantEventType.WATERED,
@@ -221,13 +223,14 @@ export class PlantIntelligenceService {
       NOTE: PlantEventType.USER_NOTE,
       PRUNE: PlantEventType.USER_NOTE,
     };
-    await this.prisma.plantEvent.create({
+    await client.plantEvent.create({
       data: {
         userId,
         plantId,
         type: typeByCare[careType] ?? PlantEventType.USER_NOTE,
         note,
         source: EvidenceSource.USER_ACTION,
+        occurredAt,
       },
     });
   }

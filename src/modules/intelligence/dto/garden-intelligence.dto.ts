@@ -31,6 +31,11 @@ export class CompleteBatchCareDto {
   @ArrayMaxSize(250)
   @IsUUID('4', { each: true })
   skippedPlantIds?: string[];
+
+  @ApiPropertyOptional({ type: Object })
+  @IsOptional()
+  @IsObject()
+  skipReasons?: Record<string, 'SKIP' | 'SOIL_WET' | 'BUSY'>;
 }
 
 export class RecoveryOutcomeDto {

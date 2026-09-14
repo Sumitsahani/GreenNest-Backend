@@ -47,6 +47,16 @@ export class CareSessionService {
         HttpStatus.BAD_REQUEST,
       );
     const skipped = new Set(dto.skippedPlantIds ?? []);
+    if (
+      Object.entries(dto.skipReasons ?? {}).some(
+        ([id, reason]) => !skipped.has(id) || !['SKIP', 'SOIL_WET', 'BUSY'].includes(reason),
+      )
+    )
+      throw new BusinessException(
+        ErrorCode.VALIDATION_ERROR,
+        'Invalid reason for a skipped plant',
+        HttpStatus.BAD_REQUEST,
+      );
     if ([...skipped].some((id) => !dto.plantIds.includes(id)))
       throw new BusinessException(
         ErrorCode.VALIDATION_ERROR,
@@ -68,25 +78,70 @@ export class CareSessionService {
         HttpStatus.NOT_FOUND,
       );
     const now = new Date();
-    const session = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.careSession.create({
-        data: {
-          userId,
-          actionType: CareType.WATER,
-          source: EvidenceSource.USER_REPORTED,
-          confidence: 0.8,
-          status: CareSessionStatus.ACTIVE,
-        },
-      });
-      for (const plant of plants) {
-        if (skipped.has(plant.id)) {
+    const session = await this.prisma.$transaction(
+      async (tx) => {
+        const created = await tx.careSession.create({
+          data: {
+            userId,
+            actionType: CareType.WATER,
+            source: EvidenceSource.USER_REPORTED,
+            confidence: 0.8,
+            status: CareSessionStatus.ACTIVE,
+          },
+        });
+        for (const plant of plants) {
+          if (skipped.has(plant.id)) {
+            const reason = dto.skipReasons?.[plant.id] ?? 'SKIP';
+            const event = await tx.plantEvent.create({
+              data: {
+                userId,
+                plantId: plant.id,
+                type: PlantEventType.WATERING_SKIPPED,
+                eventKey: 'batch_care_exception',
+                value: { sessionId: created.id, reason },
+                source: EvidenceSource.USER_REPORTED,
+                confidence: 0.8,
+                occurredAt: now,
+              },
+            });
+            if (reason !== 'SKIP')
+              await tx.careReminder.updateMany({
+                where: { plantId: plant.id, type: CareType.WATER, enabled: true },
+                data: {
+                  snoozedUntil: new Date(
+                    now.getTime() + (reason === 'SOIL_WET' ? 24 : 3) * 3_600_000,
+                  ),
+                  responseReason: reason,
+                  lastNotifiedAt: null,
+                  notificationCount: 0,
+                },
+              });
+            await tx.careSessionItem.create({
+              data: {
+                sessionId: created.id,
+                plantId: plant.id,
+                status: CareSessionItemStatus.SKIPPED,
+                eventId: event.id,
+              },
+            });
+            continue;
+          }
+          const nextWateringAt = new Date(now.getTime() + plant.wateringDays * 86_400_000);
+          const careEvent = await tx.careEvent.create({
+            data: {
+              plantId: plant.id,
+              type: CareType.WATER,
+              note: `User-reported batch watering (${created.id})`,
+              caredAt: now,
+            },
+          });
           const event = await tx.plantEvent.create({
             data: {
               userId,
               plantId: plant.id,
-              type: PlantEventType.WATERING_SKIPPED,
-              eventKey: 'batch_care_exception',
-              value: { sessionId: created.id },
+              type: PlantEventType.WATERED,
+              eventKey: 'batch_care',
+              value: { sessionId: created.id, careEventId: careEvent.id },
               source: EvidenceSource.USER_REPORTED,
               confidence: 0.8,
               occurredAt: now,
@@ -96,95 +151,66 @@ export class CareSessionService {
             data: {
               sessionId: created.id,
               plantId: plant.id,
-              status: CareSessionItemStatus.SKIPPED,
+              status: CareSessionItemStatus.COMPLETED,
+              caredAt: now,
               eventId: event.id,
+              careEventId: careEvent.id,
             },
           });
-          continue;
+          await tx.gardenPlant.update({
+            where: { id: plant.id },
+            data: { lastWateredAt: now, nextWateringAt },
+          });
+          await tx.careReminder.updateMany({
+            where: { plantId: plant.id, type: CareType.WATER, enabled: true },
+            data: {
+              scheduledAt: nextWateringAt,
+              lastNotifiedAt: null,
+              snoozedUntil: null,
+              responseReason: null,
+              notificationCount: 0,
+            },
+          });
+          await tx.plantRecommendation.updateMany({
+            where: {
+              userId,
+              plantId: plant.id,
+              action: RecommendationAction.WATER,
+              status: {
+                in: [
+                  RecommendationStatus.GENERATED,
+                  RecommendationStatus.SHOWN,
+                  RecommendationStatus.ACCEPTED,
+                ],
+              },
+            },
+            data: { status: RecommendationStatus.COMPLETED, completedAt: now, respondedAt: now },
+          });
+          await tx.notification.updateMany({
+            where: { userId, plantId: plant.id, type: 'CARE_REMINDER', readAt: null },
+            data: { readAt: now },
+          });
         }
-        const nextWateringAt = new Date(now.getTime() + plant.wateringDays * 86_400_000);
-        const careEvent = await tx.careEvent.create({
-          data: {
-            plantId: plant.id,
-            type: CareType.WATER,
-            note: `User-reported batch watering (${created.id})`,
-            caredAt: now,
-          },
-        });
-        const event = await tx.plantEvent.create({
+        await tx.engagementEvent.create({
           data: {
             userId,
-            plantId: plant.id,
-            type: PlantEventType.WATERED,
-            eventKey: 'batch_care',
-            value: { sessionId: created.id, careEventId: careEvent.id },
-            source: EvidenceSource.USER_REPORTED,
-            confidence: 0.8,
-            occurredAt: now,
-          },
-        });
-        await tx.careSessionItem.create({
-          data: {
-            sessionId: created.id,
-            plantId: plant.id,
-            status: CareSessionItemStatus.COMPLETED,
-            caredAt: now,
-            eventId: event.id,
-            careEventId: careEvent.id,
-          },
-        });
-        await tx.gardenPlant.update({
-          where: { id: plant.id },
-          data: { lastWateredAt: now, nextWateringAt },
-        });
-        await tx.careReminder.updateMany({
-          where: { plantId: plant.id, type: CareType.WATER, enabled: true },
-          data: {
-            scheduledAt: nextWateringAt,
-            lastNotifiedAt: null,
-            snoozedUntil: null,
-            responseReason: null,
-            notificationCount: 0,
-          },
-        });
-        await tx.plantRecommendation.updateMany({
-          where: {
-            userId,
-            plantId: plant.id,
-            action: RecommendationAction.WATER,
-            status: {
-              in: [
-                RecommendationStatus.GENERATED,
-                RecommendationStatus.SHOWN,
-                RecommendationStatus.ACCEPTED,
-              ],
+            name: 'care_session_completed',
+            properties: {
+              sessionId: created.id,
+              total: plants.length,
+              completed: plants.length - skipped.size,
+              skipped: skipped.size,
             },
           },
-          data: { status: RecommendationStatus.COMPLETED, completedAt: now, respondedAt: now },
         });
-        await tx.notification.updateMany({
-          where: { userId, plantId: plant.id, type: 'CARE_REMINDER', readAt: null },
-          data: { readAt: now },
+        return tx.careSession.update({
+          where: { id: created.id },
+          data: { status: CareSessionStatus.COMPLETED, completedAt: now },
+          include: { items: { select: { id: true, plantId: true, status: true, caredAt: true } } },
         });
-      }
-      await tx.engagementEvent.create({
-        data: {
-          userId,
-          name: 'care_session_completed',
-          properties: {
-            sessionId: created.id,
-            total: plants.length,
-            completed: plants.length - skipped.size,
-            skipped: skipped.size,
-          },
-        },
-      });
-      return tx.careSession.update({
-        where: { id: created.id },
-        data: { status: CareSessionStatus.COMPLETED, completedAt: now },
-        include: { items: { select: { id: true, plantId: true, status: true, caredAt: true } } },
-      });
-    });
+      },
+      { timeout: 30_000 },
+    );
     this.garden.invalidate(userId);
     return session;
   }

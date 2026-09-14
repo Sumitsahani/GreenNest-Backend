@@ -1,9 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
-import {
-  AiMemoryType,
-  EvidenceSource,
-  MemoryStatus,
-} from '@prisma/client';
+import { AiMemoryType, EvidenceSource, MemoryStatus } from '@prisma/client';
 import type { PrismaService } from '../../database/prisma.service';
 import { AiMemoryService } from './ai-memory.service';
 import type { ExtractedMemory } from './memory-extractor.service';
@@ -63,6 +59,23 @@ describe('AiMemoryService', () => {
         source: EvidenceSource.USER_CORRECTION,
       }),
     });
+  });
+  it('does not replace an explicit user correction with AI inference', async () => {
+    const mocks = setup([
+      {
+        id: 'corrected',
+        scopeKey: 'PLANT:plant-a',
+        memoryKey: memory.key,
+        memoryValue: '5 days',
+        source: EvidenceSource.USER_CORRECTION,
+        status: MemoryStatus.ACTIVE,
+      },
+    ]);
+    await mocks.service.apply('user-a', [
+      { ...memory, source: EvidenceSource.AI_INFERENCE, value: '2 days' },
+    ]);
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.create).not.toHaveBeenCalled();
   });
 
   it('reinforces an identical memory instead of duplicating it', async () => {

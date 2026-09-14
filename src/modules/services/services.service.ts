@@ -1,4 +1,5 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { BookingStatus } from '@prisma/client';
 import { ErrorCode } from '../../common/constants/error-code';
 import { BusinessException } from '../../common/exceptions/business.exception';
@@ -62,7 +63,7 @@ export class ServicesService {
       );
     return this.mapService(row);
   }
-  slots(date: string): SlotResponse[] {
+  async slots(date: string): Promise<SlotResponse[]> {
     const base = new Date(`${date}T00:00:00+05:30`);
     if (Number.isNaN(base.getTime()))
       throw new BusinessException(
@@ -70,10 +71,49 @@ export class ServicesService {
         'Invalid date',
         HttpStatus.BAD_REQUEST,
       );
-    return ['08:00', '09:30', '11:00', '12:30', '14:00', '15:30', '17:00'].map((time) => ({
-      time,
-      available: true,
-    }));
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date))
+      throw new BusinessException(
+        ErrorCode.VALIDATION_ERROR,
+        'Invalid date',
+        HttpStatus.BAD_REQUEST,
+      );
+    const [gardeners, bookings, durations] = await Promise.all([
+      this.prisma.gardener.findMany({
+        where: { active: true, verified: true },
+        select: { id: true },
+      }),
+      this.prisma.serviceBooking.findMany({
+        where: {
+          scheduledAt: {
+            gte: new Date(base.getTime() - 86_400_000),
+            lt: new Date(base.getTime() + 86_400_000),
+          },
+          status: { notIn: [BookingStatus.CANCELLED, BookingStatus.COMPLETED] },
+        },
+        include: { service: true },
+      }),
+      this.prisma.gardeningService.aggregate({
+        where: { active: true },
+        _max: { durationMinutes: true },
+      }),
+    ]);
+    return ['08:00', '09:30', '11:00', '12:30', '14:00', '15:30', '17:00'].map((time) => {
+      const start = new Date(`${date}T${time}:00+05:30`);
+      const end = start.getTime() + (durations._max.durationMinutes ?? 90) * 60_000;
+      const busy = new Set(
+        bookings
+          .filter(
+            (item) =>
+              item.scheduledAt.getTime() < end &&
+              item.scheduledAt.getTime() + item.service.durationMinutes * 60_000 > start.getTime(),
+          )
+          .map((item) => item.gardenerId),
+      );
+      return {
+        time,
+        available: start > new Date() && gardeners.some((gardener) => !busy.has(gardener.id)),
+      };
+    });
   }
   async createBooking(userId: string, dto: CreateBookingDto): Promise<BookingResponse> {
     const scheduledAt = new Date(dto.scheduledAt);
@@ -83,56 +123,77 @@ export class ServicesService {
         'Please select a future time slot',
         HttpStatus.CONFLICT,
       );
-    const [service, address] = await Promise.all([
-      this.prisma.gardeningService.findFirst({ where: { id: dto.serviceId, active: true } }),
-      this.prisma.address.findFirst({ where: { id: dto.addressId, userId } }),
-    ]);
-    if (!service)
-      throw new BusinessException(
-        ErrorCode.SERVICE_NOT_FOUND,
-        'Service not found',
-        HttpStatus.NOT_FOUND,
-      );
-    if (!address)
-      throw new BusinessException(
-        ErrorCode.NOT_FOUND,
-        'Service address not found',
-        HttpStatus.NOT_FOUND,
-      );
-    const busy = await this.prisma.serviceBooking.findMany({
-      where: { scheduledAt, status: { notIn: [BookingStatus.CANCELLED, BookingStatus.COMPLETED] } },
-      select: { gardenerId: true },
-    });
-    const gardener = await this.prisma.gardener.findFirst({
-      where: {
-        active: true,
-        verified: true,
-        id: { notIn: busy.flatMap((item) => (item.gardenerId ? [item.gardenerId] : [])) },
+    return this.prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended('gardener-allocation', 0))::text`;
+        const [service, address] = await Promise.all([
+          tx.gardeningService.findFirst({ where: { id: dto.serviceId, active: true } }),
+          tx.address.findFirst({ where: { id: dto.addressId, userId } }),
+        ]);
+        if (!service)
+          throw new BusinessException(
+            ErrorCode.SERVICE_NOT_FOUND,
+            'Service not found',
+            HttpStatus.NOT_FOUND,
+          );
+        if (!address)
+          throw new BusinessException(
+            ErrorCode.NOT_FOUND,
+            'Service address not found',
+            HttpStatus.NOT_FOUND,
+          );
+        const busy = await tx.serviceBooking.findMany({
+          where: {
+            scheduledAt: { lt: new Date(scheduledAt.getTime() + service.durationMinutes * 60_000) },
+            status: { notIn: [BookingStatus.CANCELLED, BookingStatus.COMPLETED] },
+          },
+          select: {
+            gardenerId: true,
+            scheduledAt: true,
+            service: { select: { durationMinutes: true } },
+          },
+        });
+        const gardener = await tx.gardener.findFirst({
+          where: {
+            active: true,
+            verified: true,
+            id: {
+              notIn: busy
+                .filter(
+                  (item) =>
+                    item.scheduledAt.getTime() + item.service.durationMinutes * 60_000 >
+                    scheduledAt.getTime(),
+                )
+                .flatMap((item) => (item.gardenerId ? [item.gardenerId] : [])),
+            },
+          },
+          orderBy: { rating: 'desc' },
+        });
+        if (!gardener)
+          throw new BusinessException(
+            ErrorCode.SLOT_NOT_AVAILABLE,
+            'No gardener is available for this slot',
+            HttpStatus.CONFLICT,
+          );
+        const booking = await tx.serviceBooking.create({
+          data: {
+            bookingNumber: `GB-${randomUUID()}`,
+            userId,
+            serviceId: service.id,
+            gardenerId: gardener.id,
+            addressId: address.id,
+            scheduledAt,
+            status: BookingStatus.GARDENER_ASSIGNED,
+            notes: dto.notes,
+            photoUrls: dto.photoUrls ?? [],
+            price: service.price,
+          },
+          include: { service: true, gardener: true },
+        });
+        return this.mapBooking(booking);
       },
-      orderBy: { rating: 'desc' },
-    });
-    if (!gardener)
-      throw new BusinessException(
-        ErrorCode.SLOT_NOT_AVAILABLE,
-        'No gardener is available for this slot',
-        HttpStatus.CONFLICT,
-      );
-    const booking = await this.prisma.serviceBooking.create({
-      data: {
-        bookingNumber: `GB-${Date.now().toString().slice(-7)}`,
-        userId,
-        serviceId: service.id,
-        gardenerId: gardener.id,
-        addressId: address.id,
-        scheduledAt,
-        status: BookingStatus.GARDENER_ASSIGNED,
-        notes: dto.notes,
-        photoUrls: dto.photoUrls ?? [],
-        price: service.price,
-      },
-      include: { service: true, gardener: true },
-    });
-    return this.mapBooking(booking);
+      { timeout: 15_000 },
+    );
   }
   async bookings(userId: string): Promise<BookingResponse[]> {
     const rows = await this.prisma.serviceBooking.findMany({

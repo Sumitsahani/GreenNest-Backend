@@ -41,4 +41,26 @@ describe('Spaces API contract', () => {
       .send({ photoPath: 'fake/spaces/photo.jpg', imageUrl: 'https://example.com/photo.jpg' })
       .expect(401);
   });
+
+  it('protects plant matching behind authentication', async () => {
+    await request(app.getHttpServer())
+      .post('/api/v1/spaces/11111111-1111-4111-8111-111111111111/recommendations')
+      .send({ style: 'MINIMAL', carePreference: 'EASY' })
+      .expect(401);
+  });
+
+  it('protects design creation and saved designs behind authentication', async () => {
+    const path = '/api/v1/spaces/11111111-1111-4111-8111-111111111111/designs';
+    await request(app.getHttpServer()).get(path).expect(401);
+    await request(app.getHttpServer()).post(path).send({}).expect(401);
+    await request(app.getHttpServer())
+      .get(`${path}/22222222-2222-4222-8222-222222222222`)
+      .expect(401);
+    await request(app.getHttpServer())
+      .get(`${path}/22222222-2222-4222-8222-222222222222/image`)
+      .expect(401);
+    await request(app.getHttpServer())
+      .post(`${path}/22222222-2222-4222-8222-222222222222/image`)
+      .expect(401);
+  });
 });

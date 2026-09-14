@@ -10,7 +10,24 @@ async function bootstrap(): Promise<void> {
   app.useStaticAssets(join(process.cwd(), 'public'));
   setupApp(app);
   setupSwagger(app);
-  await app.listen(Number(process.env.PORT ?? 3000));
+  await app.listen(Number(process.env.PORT ?? 3000), process.env.HOST ?? '0.0.0.0');
 }
 
-void bootstrap();
+void bootstrap().catch((error: unknown) => {
+  const code =
+    error && typeof error === 'object' && 'errorCode' in error
+      ? String(error.errorCode)
+      : error && typeof error === 'object' && 'code' in error
+        ? String(error.code)
+        : 'STARTUP_FAILED';
+  if (code === 'EADDRINUSE') {
+    console.error(
+      `Backend startup failed (EADDRINUSE): port ${Number(process.env.PORT ?? 3000)} is already in use. Stop the existing backend before restarting, or use the running instance.`,
+    );
+  } else {
+    console.error(
+      `Backend startup failed (${code}). Check database connectivity and server configuration.`,
+    );
+  }
+  process.exitCode = 1;
+});

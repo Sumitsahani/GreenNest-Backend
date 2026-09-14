@@ -64,6 +64,14 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       };
     }
     if (exception instanceof Prisma.PrismaClientKnownRequestError) {
+      if (exception.code === 'P2034')
+        return {
+          status: HttpStatus.CONFLICT,
+          code: ErrorCode.RESOURCE_ALREADY_EXISTS,
+          message: 'Another request changed this data. Please retry.',
+          field: null,
+          details: null,
+        };
       if (exception.code === 'P2002') {
         return {
           status: HttpStatus.CONFLICT,
@@ -82,6 +90,15 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           details: null,
         };
       }
+    }
+    if (exception instanceof Prisma.PrismaClientInitializationError) {
+      return {
+        status: HttpStatus.SERVICE_UNAVAILABLE,
+        code: ErrorCode.SERVICE_UNAVAILABLE,
+        message: 'Database is temporarily unavailable. Please retry.',
+        field: null,
+        details: null,
+      };
     }
     if (exception instanceof BadRequestException) {
       const body = exception.getResponse();
