@@ -66,7 +66,7 @@ export class AiService {
     await this.assertConversation(userId, conversationId);
     return this.prisma.aiMessage.findMany({
       where: { conversationId },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { sequence: 'asc' },
     });
   }
 
@@ -76,93 +76,159 @@ export class AiService {
     dto: SendAiMessageDto,
   ): Promise<{
     userMessage: AiMessage;
+    userMessages?: AiMessage[];
     assistantMessage: AiMessage | null;
     memoriesUpdated: number;
     careUpdate?: AiCareUpdate;
     superseded?: boolean;
   }> {
     await this.assertConversation(userId, conversationId);
-    const content = dto.message.trim();
+    const originals = (dto.messages ?? [dto.message]).map((message) => message.trim());
+    const content = originals.join('\n');
+    if (originals.some((message) => !message) || content.length > 4000)
+      throw new BusinessException(
+        ErrorCode.VALIDATION_ERROR,
+        'Send between 1 and 4000 characters per batch.',
+        HttpStatus.BAD_REQUEST,
+      );
     const requestId = dto.requestId ?? crypto.randomUUID();
-    await this.prisma.aiConversation.update({
-      where: { id: conversationId },
-      data: { activeRequestId: requestId },
-    });
     // The first build validates optional plant ownership before any message is
     // persisted. Rebuild after extraction so an explicit correction in this
     // message can immediately influence the answer.
     const initialContext = await this.context.build(userId, content, dto.plantId);
-    const recentHistory = await this.prisma.aiMessage.findMany({
-      where: { conversationId, role: { in: [AiMessageRole.USER, AiMessageRole.ASSISTANT] } },
-      orderBy: { createdAt: 'desc' },
-      take: 12,
-      select: { role: true, content: true },
-    });
-    const userMessage = await this.prisma.aiMessage.create({
-      data: {
-        conversationId,
-        role: AiMessageRole.USER,
-        content,
-        plantId: dto.plantId,
-        intent: initialContext.intent,
-      },
-    });
-    if (recentHistory.length === 0) {
-      await this.prisma.aiConversation.update({
-        where: { id: conversationId },
-        data: { title: content.length > 52 ? `${content.slice(0, 49)}...` : content },
+    const persisted = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`chat:${conversationId}`}, 0))::text`;
+      const old = await tx.aiMessage.findMany({
+        where: { conversationId, requestId },
+        orderBy: { sequence: 'asc' },
       });
-    }
-    const careAction = await this.careActions.apply(userId, dto.plantId, content);
-    const extracted = this.extractor.extract(content, dto.plantId);
-    if (extracted.length) await this.memories.apply(userId, extracted);
-    await this.intelligence.learnFromConversation(userId, dto.plantId, content);
-    const context = await this.context.build(userId, content, dto.plantId);
-    const response =
-      careAction?.reply ??
-      (await this.responses.generate(
-        content,
-        context,
-        dto.imageUrl,
-        recentHistory.reverse().map((turn) => ({
-          role: turn.role as 'USER' | 'ASSISTANT',
-          content: turn.content,
-        })),
-        dto.language ?? 'AUTO',
-      ));
-    const current = await this.prisma.aiConversation.findFirst({
-      where: { id: conversationId, userId },
-      select: { activeRequestId: true },
+      const users = old.filter((message) => message.role === AiMessageRole.USER);
+      if (
+        users.length &&
+        (users.map((message) => message.content).join('\n') !== content ||
+          users[0]?.plantId !== (dto.plantId ?? null))
+      )
+        throw new BusinessException(
+          ErrorCode.VALIDATION_ERROR,
+          'This request ID belongs to different messages.',
+          HttpStatus.CONFLICT,
+        );
+      const assistant = old.find((message) => message.role === AiMessageRole.ASSISTANT);
+      if (assistant) return { users, assistant, replay: true };
+      const current = await tx.aiConversation.findUniqueOrThrow({ where: { id: conversationId } });
+      if (
+        users.length &&
+        current.activeRequestId === requestId &&
+        Date.now() - current.updatedAt.getTime() < 120_000
+      )
+        throw new BusinessException(
+          ErrorCode.RESOURCE_ALREADY_EXISTS,
+          'This reply is still being prepared. Please wait before retrying.',
+          HttpStatus.CONFLICT,
+        );
+      await tx.aiConversation.update({
+        where: { id: conversationId },
+        data: { activeRequestId: requestId },
+      });
+      if (!users.length) {
+        for (const [batchIndex, message] of originals.entries())
+          users.push(
+            await tx.aiMessage.create({
+              data: {
+                conversationId,
+                requestId,
+                batchIndex,
+                role: AiMessageRole.USER,
+                content: message,
+                plantId: dto.plantId,
+                intent: initialContext.intent,
+              },
+            }),
+          );
+      }
+      return { users, assistant: null, replay: old.length > 0 };
     });
-    if (current?.activeRequestId !== requestId) {
+    const userMessage = persisted.users[0]!;
+    if (persisted.assistant)
       return {
         userMessage,
-        assistantMessage: null,
+        userMessages: persisted.users,
+        assistantMessage: persisted.assistant,
+        memoriesUpdated: 0,
+      };
+    try {
+      const recentHistory = await this.prisma.aiMessage.findMany({
+        where: {
+          conversationId,
+          sequence: { lt: userMessage.sequence },
+          role: { in: [AiMessageRole.USER, AiMessageRole.ASSISTANT] },
+        },
+        orderBy: { sequence: 'desc' },
+        take: 12,
+        select: { role: true, content: true },
+      });
+      if (recentHistory.length === 0) {
+        await this.prisma.aiConversation.update({
+          where: { id: conversationId },
+          data: { title: content.length > 52 ? `${content.slice(0, 49)}...` : content },
+        });
+      }
+      const careAction = persisted.replay
+        ? null
+        : await this.careActions.apply(userId, dto.plantId, content);
+      const extracted = persisted.replay ? [] : this.extractor.extract(content, dto.plantId);
+      if (extracted.length) await this.memories.apply(userId, extracted);
+      if (!persisted.replay)
+        await this.intelligence.learnFromConversation(userId, dto.plantId, content);
+      const context = await this.context.build(userId, content, dto.plantId);
+      const response =
+        careAction?.reply ??
+        (await this.responses.generate(
+          content,
+          context,
+          dto.imageUrl,
+          recentHistory.reverse().map((turn) => ({
+            role: turn.role as 'USER' | 'ASSISTANT',
+            content: turn.content,
+          })),
+          dto.language ?? 'AUTO',
+        ));
+      const assistantMessage = await this.prisma.$transaction(async (tx) => {
+        const claimed = await tx.aiConversation.updateMany({
+          where: { id: conversationId, userId, activeRequestId: requestId },
+          data: { activeRequestId: null, updatedAt: new Date() },
+        });
+        if (!claimed.count) return null;
+        return tx.aiMessage.create({
+          data: {
+            conversationId,
+            requestId,
+            role: AiMessageRole.ASSISTANT,
+            content: response,
+            plantId: dto.plantId,
+            intent: context.intent,
+            sourcesUsed: [
+              ...context.sourcesUsed,
+              ...(careAction?.update ? ['chat_care_update'] : []),
+            ],
+          },
+        });
+      });
+      return {
+        userMessage,
+        userMessages: persisted.users,
+        assistantMessage,
+        superseded: assistantMessage === null,
         memoriesUpdated: extracted.length,
         careUpdate: careAction?.update,
-        superseded: true,
       };
+    } catch (error) {
+      await this.prisma.aiConversation.updateMany({
+        where: { id: conversationId, activeRequestId: requestId },
+        data: { activeRequestId: null },
+      });
+      throw error;
     }
-    const assistantMessage = await this.prisma.aiMessage.create({
-      data: {
-        conversationId,
-        role: AiMessageRole.ASSISTANT,
-        content: response,
-        plantId: dto.plantId,
-        intent: context.intent,
-        sourcesUsed: [...context.sourcesUsed, ...(careAction?.update ? ['chat_care_update'] : [])],
-      },
-    });
-    await this.prisma.aiConversation.update({
-      where: { id: conversationId },
-      data: { updatedAt: new Date() },
-    });
-    return {
-      userMessage,
-      assistantMessage,
-      memoriesUpdated: extracted.length,
-      careUpdate: careAction?.update,
-    };
   }
 
   private async assertConversation(userId: string, id: string): Promise<void> {

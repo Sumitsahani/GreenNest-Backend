@@ -18,6 +18,7 @@ describe('GardenService care events', () => {
     };
     const findFirst = jest.fn().mockResolvedValue(plant);
     const tx = {
+      plantRecommendation: { updateMany: jest.fn() },
       notification: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       careEvent: { create: jest.fn().mockResolvedValue({}) },
       gardenPlant: { update: jest.fn().mockResolvedValue({}) },
@@ -50,6 +51,8 @@ describe('GardenService care events', () => {
       'plant-1',
       CareAction.WATER,
       undefined,
+      tx,
+      expect.any(Date),
     );
   });
 });

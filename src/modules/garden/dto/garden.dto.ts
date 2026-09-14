@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, PartialType, PickType } from '@nestjs/swagger';
 import {
   IsBoolean,
   IsDateString,
@@ -62,6 +62,18 @@ export enum CareAction {
   REPOT = 'REPOT',
   NOTE = 'NOTE',
 }
+export class UpdatePlantDto extends PartialType(
+  PickType(CreatePlantDto, [
+    'name',
+    'species',
+    'location',
+    'environment',
+    'notes',
+    'weatherLocation',
+    'latitude',
+    'longitude',
+  ] as const),
+) {}
 export class AddCareEventDto {
   @ApiProperty({ enum: CareAction }) @IsEnum(CareAction) type!: CareAction;
   @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(500) note?: string;

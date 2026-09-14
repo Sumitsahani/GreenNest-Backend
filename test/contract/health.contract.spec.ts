@@ -1,5 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
+import { PrismaService } from '../../src/database/prisma.service';
 
 describe('Health API contract', () => {
   let app: INestApplication;
@@ -19,7 +20,10 @@ describe('Health API contract', () => {
     ]);
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(PrismaService)
+      .useValue({ $queryRaw: jest.fn().mockResolvedValue([{ '?column?': 1 }]) })
+      .compile();
     app = moduleRef.createNestApplication();
     setupApp(app);
     await app.init();
@@ -38,7 +42,7 @@ describe('Health API contract', () => {
         status: 'ok',
         service: 'greennest-api',
         version: '1.0.0',
-        database: 'not-connected',
+        database: 'connected',
       },
     });
   });

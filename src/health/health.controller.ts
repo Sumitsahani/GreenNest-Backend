@@ -17,7 +17,7 @@ export class HealthController {
   @Get()
   @ApiOperation({ summary: 'Check API readiness and database connection state' })
   @ApiOkResponse({ type: HealthSuccessEnvelopeDto })
-  getHealth(): HealthResponseDto {
+  getHealth(): Promise<HealthResponseDto> {
     return this.healthService.getHealth();
   }
 
@@ -25,7 +25,7 @@ export class HealthController {
   @ApiOperation({ summary: 'Check a named platform component' })
   @ApiOkResponse({ type: HealthSuccessEnvelopeDto })
   @ApiNotFoundResponse({ type: ErrorEnvelopeDto, description: 'NOT_FOUND' })
-  getComponent(@Param('component') component: string): HealthResponseDto {
+  getComponent(@Param('component') component: string): Promise<HealthResponseDto> {
     if (!['api', 'database'].includes(component)) {
       throw new BusinessException(
         ErrorCode.NOT_FOUND,

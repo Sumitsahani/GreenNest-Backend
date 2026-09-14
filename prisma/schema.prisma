@@ -345,6 +345,7 @@ model Address {
 model Order {
   id              String      @id @default(uuid()) @db.Uuid
   orderNumber     String      @unique
+  requestId       String?     @map("request_id")
   userId          String      @db.Uuid
   status          OrderStatus @default(PLACED)
   addressLabel    String
@@ -360,6 +361,7 @@ model Order {
 
   @@index([userId, createdAt])
   @@index([status])
+  @@unique([userId, requestId])
 }
 
 model RewardTransaction {
@@ -829,6 +831,7 @@ model Space {
   analysisError   String?
   scene           SpaceScene?
   recommendations SpacePlantRecommendation[]
+  designs         SpaceDesign[]
   createdAt       DateTime                   @default(now())
   updatedAt       DateTime                   @updatedAt
 
@@ -866,6 +869,22 @@ model SpacePlantRecommendation {
   @@index([productId])
 }
 
+model SpaceDesign {
+  id             String              @id @default(uuid()) @db.Uuid
+  spaceId        String              @db.Uuid
+  requestId      String              @db.Uuid
+  requestHash    String
+  title          String
+  style          SpaceDesignStyle
+  carePreference SpaceCarePreference
+  scene          Json
+  createdAt      DateTime            @default(now())
+  space          Space               @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  @@unique([spaceId, requestId])
+  @@index([spaceId, createdAt])
+}
+
 model SpaceScene {
   id             String   @id @default(uuid()) @db.Uuid
   spaceId        String   @unique @db.Uuid
@@ -899,11 +918,30 @@ model AiConversation {
   @@map("ai_conversations")
 }
 
+model EmailOtp {
+  email         String    @id
+  otpHash       String    @map("otp_hash")
+  expiresAt     DateTime  @map("expires_at")
+  attemptCount  Int       @default(0) @map("attempt_count")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  sentAt        DateTime? @map("sent_at")
+  verifiedAt    DateTime? @map("verified_at")
+  usedAt        DateTime? @map("used_at")
+  windowStart   DateTime  @default(now()) @map("window_start")
+  requestCount  Int       @default(1) @map("request_count")
+
+  @@index([expiresAt])
+  @@map("email_otps")
+}
+
 model AiMessage {
   id             String         @id @default(uuid()) @db.Uuid
   conversationId String         @map("conversation_id") @db.Uuid
   role           AiMessageRole
   content        String
+  requestId      String?        @map("request_id") @db.Uuid
+  batchIndex     Int            @default(0) @map("batch_index")
+  sequence       Int            @unique @default(autoincrement())
   plantId        String?        @map("plant_id") @db.Uuid
   intent         String?
   sourcesUsed    String[]       @default([]) @map("sources_used")
@@ -913,6 +951,7 @@ model AiMessage {
   createdAt      DateTime       @default(now()) @map("created_at")
 
   @@index([conversationId, createdAt])
+  @@unique([conversationId, requestId, role, batchIndex])
   @@map("ai_messages")
 }
 
