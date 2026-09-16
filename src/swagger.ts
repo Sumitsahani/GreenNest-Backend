@@ -3,9 +3,9 @@ import { DocumentBuilder, SwaggerModule, type OpenAPIObject } from '@nestjs/swag
 
 export function createOpenApiDocument(app: INestApplication): OpenAPIObject {
   const config = new DocumentBuilder()
-    .setTitle('GreenNest API')
+    .setTitle('Vanya API')
     .setDescription(
-      'Versioned REST contract shared by the GreenNest React Native and Next.js applications.',
+      'Versioned REST contract shared by the Vanya React Native and Next.js applications.',
     )
     .setVersion('1.0.0')
     .addBearerAuth()

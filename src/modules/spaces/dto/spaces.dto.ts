@@ -3,7 +3,7 @@ import { SpaceCarePreference, SpaceDesignStyle, SpaceType } from '@prisma/client
 import { IsEnum, IsIn, IsOptional, IsString, IsUrl, Length } from 'class-validator';
 
 export class AnalyzeSpaceDto {
-  @ApiProperty({ description: 'Short-lived signed URL for a private GreenNest space photo' })
+  @ApiProperty({ description: 'Short-lived signed URL for a private Vanya space photo' })
   @IsUrl({ require_protocol: true, protocols: ['https'] })
   imageUrl!: string;
 

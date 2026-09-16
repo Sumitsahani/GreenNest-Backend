@@ -1,7 +1,18 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { ArrayMaxSize, IsArray, IsDateString, IsOptional, IsString, IsUrl, IsUUID, MaxLength } from 'class-validator';
+import {
+  ArrayMaxSize,
+  IsArray,
+  IsDateString,
+  IsOptional,
+  IsString,
+  IsUrl,
+  IsUUID,
+  MaxLength,
+} from 'class-validator';
 
 export class CreateBookingDto {
+  @IsOptional() @IsArray() @ArrayMaxSize(20) @IsUUID('all', { each: true }) plantIds?: string[];
+  @IsOptional() @IsString() @MaxLength(100) customerName?: string;
   @ApiProperty({ format: 'uuid' }) @IsUUID() serviceId!: string;
   @ApiProperty({ format: 'uuid' }) @IsUUID() addressId!: string;
   @ApiProperty({ format: 'date-time' }) @IsDateString() scheduledAt!: string;

@@ -22,6 +22,7 @@ import { IntelligenceModule } from './modules/intelligence/intelligence.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { SupportModule } from './modules/support/support.module';
 import { SpacesModule } from './modules/spaces/spaces.module';
+import { GardenerModule } from './modules/gardener/gardener.module';
 
 @Module({
   imports: [
@@ -57,6 +58,7 @@ import { SpacesModule } from './modules/spaces/spaces.module';
     NotificationsModule,
     SupportModule,
     SpacesModule,
+    GardenerModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

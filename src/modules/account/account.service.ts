@@ -18,7 +18,7 @@ export class AccountService {
   async notifications(userId: string): Promise<Notification[]> {
     const count = await this.prisma.notification.count({ where: { userId } });
     if (count === 0) {
-      await this.prisma.notification.create({ data: { userId, title: 'Welcome to GreenNest', message: 'Your garden, orders and service updates will appear here.', type: 'WELCOME' } });
+      await this.prisma.notification.create({ data: { userId, title: 'Welcome to Vanya', message: 'Your garden, orders and service updates will appear here.', type: 'WELCOME' } });
     }
     return this.prisma.notification.findMany({ where: { userId }, orderBy: { createdAt: 'desc' } });
   }

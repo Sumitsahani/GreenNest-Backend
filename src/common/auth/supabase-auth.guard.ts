@@ -26,10 +26,17 @@ export class SupabaseAuthGuard implements CanActivate {
     }
     if (response.status === 401 || response.status === 403) this.unauthorized();
     if (!response.ok) this.unavailable();
-    const user = (await response.json()) as AuthenticatedUser;
+    const user = (await response.json()) as AuthenticatedUser & {
+      app_metadata?: { role?: string };
+    };
     if (!user || typeof user.id !== 'string' || !/^[0-9a-f-]{36}$/i.test(user.id))
       this.unavailable();
-    request.authUser = { id: user.id, email: user.email ?? null, phone: user.phone ?? null };
+    request.authUser = {
+      id: user.id,
+      email: user.email ?? null,
+      phone: user.phone ?? null,
+      ...(user.app_metadata?.role === 'ADMIN' ? { role: 'ADMIN' as const } : {}),
+    };
     return true;
   }
 
