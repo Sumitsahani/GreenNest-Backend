@@ -55,7 +55,7 @@ export class SupportService {
             {
               sender: SupportMessageSender.SYSTEM,
               message:
-                'Your message is saved. The GreenNest support team can reply in this conversation.',
+                'Your message is saved. The Vanya support team can reply in this conversation.',
             },
           ],
         },
@@ -166,7 +166,7 @@ export class SupportService {
       await tx.notification.create({
         data: {
           userId: conversation.userId,
-          title: 'GreenNest Support replied',
+          title: 'Vanya Support replied',
           message: dto.message.trim().slice(0, 240),
           type: 'SUPPORT_REPLY',
         },

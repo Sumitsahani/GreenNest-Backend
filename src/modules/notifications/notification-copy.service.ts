@@ -124,7 +124,7 @@ export class NotificationCopyService {
             parts: [
               {
                 text: [
-                  'You write short GreenNest weather notifications for an all-ages audience.',
+                  'You write short Vanya weather notifications for an all-ages audience.',
                   'Use only the supplied facts and required action. Never invent weather, timing, plant state, or risk.',
                   'Never use adult, sexual, romantic, dating, abusive, insulting, discriminatory, violent, substance-related, or double-meaning language.',
                   'Do not shame or frighten the user. Do not advise watering blindly. Keep jokes gentle and plant-related.',

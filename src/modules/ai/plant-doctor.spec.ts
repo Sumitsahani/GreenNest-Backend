@@ -48,14 +48,14 @@ describe('Plant Doctor chat', () => {
       'ENGLISH',
     );
     const body = JSON.parse(mock.mock.calls[0]![1]!.body as string) as ChatRequest;
-    const instruction = body.systemInstruction.parts[0].text;
+    const instruction = body.systemInstruction.parts[0]?.text;
     expect(instruction).toContain(plantDoctorPrompt);
     expect(instruction).toContain('Reply only in natural English');
     expect(instruction).toContain('configured response language takes priority');
     expect(instruction).not.toContain('Always follow the CURRENT QUESTION language');
-    expect(body.contents[0].parts[0].text).toBe('The plant was indoors.');
-    expect(body.contents[2].parts[0].text).toContain(context.promptContext);
-    expect(body.contents[2].parts[0].text).toContain('Actually balcony mein hai.');
+    expect(body.contents[0]?.parts[0]?.text).toBe('The plant was indoors.');
+    expect(body.contents[2]?.parts[0]?.text).toContain(context.promptContext);
+    expect(body.contents[2]?.parts[0]?.text).toContain('Actually balcony mein hai.');
   });
 
   it.each([429, 503])(
@@ -94,7 +94,7 @@ describe('Plant Doctor chat', () => {
     );
     expect(mock).toHaveBeenCalledTimes(2);
     expect(
-      (JSON.parse(mock.mock.calls[1]![1]!.body as string) as ChatRequest).systemInstruction.parts[0].text,
+      (JSON.parse(mock.mock.calls[1]![1]!.body as string) as ChatRequest).systemInstruction.parts[0]?.text,
     ).toContain(plantDoctorPrompt);
   });
 });

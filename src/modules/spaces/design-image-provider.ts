@@ -48,7 +48,7 @@ export class DesignImageProvider {
     const key = process.env.GEMINI_IMAGE_API_KEY || process.env.GEMINI_API_KEY;
     if (!key)
       throw imageFailure(
-        'Photo generation is not configured yet. Please contact GreenNest support.',
+        'Photo generation is not configured yet. Please contact Vanya support.',
       );
     const model = process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image';
     const input: ({ type: 'text'; text: string } | ({ type: 'image' } & ImageData))[] = [
@@ -100,11 +100,11 @@ export class DesignImageProvider {
     }
     if (response.status === 429 || response.status === 402)
       throw imageFailure(
-        'Image generation quota is unavailable. Please ask GreenNest support to enable it.',
+        'Image generation quota is unavailable. Please ask Vanya support to enable it.',
       );
     if ([400, 401, 403, 404].includes(response.status))
       throw imageFailure(
-        'Photo generation is not available with the current AI setup. Please contact GreenNest support.',
+        'Photo generation is not available with the current AI setup. Please contact Vanya support.',
       );
     if (!response.ok) throw imageFailure('The image could not be created. Please try again.');
     return { ...readGeneratedImage(await response.json()), model };

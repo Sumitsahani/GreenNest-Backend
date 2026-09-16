@@ -42,7 +42,7 @@ export class SupportController {
   }
 
   @Post(':id/messages')
-  @ApiOperation({ summary: 'Send a message to GreenNest support' })
+  @ApiOperation({ summary: 'Send a message to Vanya support' })
   send(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,

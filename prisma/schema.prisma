@@ -69,6 +69,7 @@ enum PlantOutcomeType {
 }
 
 enum EvidenceSource {
+  GARDENER_OBSERVATION
   USER_STATEMENT
   USER_REPORTED
   USER_CORRECTION
@@ -160,6 +161,14 @@ enum AiFeedbackReason {
 }
 
 enum BookingStatus {
+  REQUESTED
+  ACCEPTED
+  ARRIVED
+  INSPECTION
+  CUSTOMER_CONFIRMED
+  OUTCOME_RECORDED
+  REJECTED
+  NO_SHOW
   CONFIRMED
   GARDENER_ASSIGNED
   ON_THE_WAY
@@ -654,6 +663,7 @@ model EngagementEvent {
 }
 
 model GardeningService {
+  commissionBps   Int?
   id              String           @id @default(uuid()) @db.Uuid
   slug            String           @unique
   title           String
@@ -670,13 +680,31 @@ model GardeningService {
 }
 
 model Gardener {
+  userId         String?          @unique @db.Uuid
+  avatarUrl      String?
+  city           String           @default("")
+  serviceAreas   String[]         @default([])
+  postalCodes    String[]         @default([])
+  experienceYears Int             @default(0)
+  skills         String[]         @default([])
+  plantTypes     String[]         @default([])
+  serviceIds     String[]         @default([])
+  languages      String[]         @default([])
+  about          String           @default("")
+  serviceRadiusKm Int             @default(10)
+  available      Boolean          @default(false)
+  workingDays    Int[]            @default([1, 2, 3, 4, 5, 6])
+  startTime      String           @default("08:00")
+  endTime        String           @default("18:00")
+  profileComplete Boolean         @default(false)
+  payouts        GardenerPayout[]
   id             String           @id @default(uuid()) @db.Uuid
   name           String
   identityNumber String           @unique
   phoneMasked    String
   rating         Decimal          @default(5) @db.Decimal(2, 1)
   jobsCompleted  Int              @default(0)
-  verified       Boolean          @default(true)
+  verified       Boolean          @default(false)
   active         Boolean          @default(true)
   bookings       ServiceBooking[]
   createdAt      DateTime         @default(now())
@@ -684,6 +712,16 @@ model Gardener {
 }
 
 model ServiceBooking {
+  plantIds      String[]          @default([])
+  customerName  String?
+  visitStartedAt DateTime?
+  completedAt   DateTime?
+  confirmedAt   DateTime?
+  completionNotes String?
+  rating        Int?
+  issue         String?
+  activities    BookingActivity[]
+  payout        GardenerPayout?
   id            String           @id @default(uuid()) @db.Uuid
   bookingNumber String           @unique
   userId        String           @db.Uuid
@@ -703,6 +741,37 @@ model ServiceBooking {
   @@index([userId, createdAt])
   @@index([gardenerId, scheduledAt])
   @@index([scheduledAt, status])
+}
+
+model BookingActivity {
+  id         String @id @default(uuid()) @db.Uuid
+  bookingId  String @db.Uuid
+  actorId    String @db.Uuid
+  requestId  String
+  kind       String
+  plantId    String? @db.Uuid
+  data       Json
+  createdAt  DateTime @default(now())
+  booking    ServiceBooking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@unique([bookingId, actorId, requestId])
+  @@index([bookingId, createdAt])
+}
+
+model GardenerPayout {
+  id          String @id @default(uuid()) @db.Uuid
+  bookingId   String @unique @db.Uuid
+  gardenerId  String @db.Uuid
+  gross       Decimal @db.Decimal(10, 2)
+  platformFee Decimal? @db.Decimal(10, 2)
+  net         Decimal? @db.Decimal(10, 2)
+  status      String @default("PENDING")
+  reference   String? @unique
+  paidAt      DateTime?
+  createdAt   DateTime @default(now())
+  booking     ServiceBooking @relation(fields: [bookingId], references: [id])
+  gardener    Gardener @relation(fields: [gardenerId], references: [id])
+  @@index([gardenerId, createdAt])
 }
 
 model WishlistItem {

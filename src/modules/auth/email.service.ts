@@ -44,8 +44,8 @@ export class EmailService {
       const result = await this.transporter.sendMail({
         from: this.config.getOrThrow<string>('SMTP_FROM'),
         to: email,
-        subject: 'Your GreenNest verification code',
-        text: `Your GreenNest verification code is ${otp}. It expires in ${expiryMinutes} minutes. If you did not request this code, ignore this email.`,
+        subject: 'Your Vanya verification code',
+        text: `Your Vanya verification code is ${otp}. It expires in ${expiryMinutes} minutes. If you did not request this code, ignore this email.`,
         html: renderEmailOtp(otp, expiryMinutes),
       });
       if (!result.accepted?.length || result.rejected?.length)

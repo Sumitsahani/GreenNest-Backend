@@ -49,7 +49,7 @@ export class SendAiMessageDto {
   @Length(1, 4000, { each: true })
   messages?: string[];
 
-  @ApiPropertyOptional({ description: 'A GreenNest Supabase Storage plant photo URL' })
+  @ApiPropertyOptional({ description: 'A Vanya Supabase Storage plant photo URL' })
   @IsOptional()
   @IsUrl({ require_protocol: true, protocols: ['https'] })
   imageUrl?: string;

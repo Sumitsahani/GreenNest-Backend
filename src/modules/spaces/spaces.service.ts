@@ -118,7 +118,7 @@ export class SpacesService {
     } catch {
       throw new BusinessException(
         ErrorCode.VALIDATION_ERROR,
-        'Use a valid signed GreenNest space photo URL',
+        'Use a valid signed Vanya space photo URL',
         HttpStatus.BAD_REQUEST,
       );
     }
@@ -141,7 +141,7 @@ export class SpacesService {
     ) {
       throw new BusinessException(
         ErrorCode.VALIDATION_ERROR,
-        'Use a valid signed GreenNest space photo URL',
+        'Use a valid signed Vanya space photo URL',
         HttpStatus.BAD_REQUEST,
       );
     }

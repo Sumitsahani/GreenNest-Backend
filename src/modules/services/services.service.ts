@@ -5,6 +5,7 @@ import { ErrorCode } from '../../common/constants/error-code';
 import { BusinessException } from '../../common/exceptions/business.exception';
 import { PrismaService } from '../../database/prisma.service';
 import type { CreateBookingDto } from './dto/booking.dto';
+import { canWork, closedJobs } from '../gardener/job-policy';
 
 export interface ServiceResponse {
   id: string;
@@ -79,8 +80,12 @@ export class ServicesService {
       );
     const [gardeners, bookings, durations] = await Promise.all([
       this.prisma.gardener.findMany({
-        where: { active: true, verified: true },
-        select: { id: true },
+        where: {
+          active: true,
+          available: true,
+          profileComplete: true,
+          userId: { not: null },
+        },
       }),
       this.prisma.serviceBooking.findMany({
         where: {
@@ -88,7 +93,7 @@ export class ServicesService {
             gte: new Date(base.getTime() - 86_400_000),
             lt: new Date(base.getTime() + 86_400_000),
           },
-          status: { notIn: [BookingStatus.CANCELLED, BookingStatus.COMPLETED] },
+          status: { notIn: closedJobs },
         },
         include: { service: true },
       }),
@@ -111,7 +116,13 @@ export class ServicesService {
       );
       return {
         time,
-        available: start > new Date() && gardeners.some((gardener) => !busy.has(gardener.id)),
+        available:
+          start > new Date() &&
+          gardeners.some(
+            (gardener) =>
+              !busy.has(gardener.id) &&
+              canWork(gardener, start, durations._max.durationMinutes ?? 90),
+          ),
       };
     });
   }
@@ -145,7 +156,7 @@ export class ServicesService {
         const busy = await tx.serviceBooking.findMany({
           where: {
             scheduledAt: { lt: new Date(scheduledAt.getTime() + service.durationMinutes * 60_000) },
-            status: { notIn: [BookingStatus.CANCELLED, BookingStatus.COMPLETED] },
+            status: { notIn: closedJobs },
           },
           select: {
             gardenerId: true,
@@ -153,10 +164,14 @@ export class ServicesService {
             service: { select: { durationMinutes: true } },
           },
         });
-        const gardener = await tx.gardener.findFirst({
+        const candidates = await tx.gardener.findMany({
           where: {
             active: true,
-            verified: true,
+            available: true,
+            profileComplete: true,
+            userId: { not: null },
+            serviceIds: { has: service.id },
+            postalCodes: { has: address.postalCode },
             id: {
               notIn: busy
                 .filter(
@@ -169,6 +184,18 @@ export class ServicesService {
           },
           orderBy: { rating: 'desc' },
         });
+        const gardener = candidates.find((g) =>
+          canWork(g, scheduledAt, service.durationMinutes, service.id, address.postalCode),
+        );
+        const plantIds = [...new Set(dto.plantIds ?? [])];
+        if (!plantIds.length) throw new BusinessException(ErrorCode.VALIDATION_ERROR, 'Select at least one plant for the visit.', HttpStatus.BAD_REQUEST);
+        const plantCount = await tx.gardenPlant.count({ where: { id: { in: plantIds }, userId } });
+        if (plantCount !== plantIds.length)
+          throw new BusinessException(
+            ErrorCode.FORBIDDEN,
+            'Only your own plants can be linked to a booking.',
+            HttpStatus.FORBIDDEN,
+          );
         if (!gardener)
           throw new BusinessException(
             ErrorCode.SLOT_NOT_AVAILABLE,
@@ -183,13 +210,24 @@ export class ServicesService {
             gardenerId: gardener.id,
             addressId: address.id,
             scheduledAt,
-            status: BookingStatus.GARDENER_ASSIGNED,
+            status: BookingStatus.REQUESTED,
+            plantIds,
+            customerName: dto.customerName,
             notes: dto.notes,
             photoUrls: dto.photoUrls ?? [],
             price: service.price,
           },
           include: { service: true, gardener: true },
         });
+        if (gardener.userId)
+          await tx.notification.create({
+            data: {
+              userId: gardener.userId,
+              title: 'New job request',
+              message: `${booking.bookingNumber}: ${service.title} on ${scheduledAt.toISOString()}`,
+              type: 'GARDENER_NEW_JOB',
+            },
+          });
         return this.mapBooking(booking);
       },
       { timeout: 15_000 },
