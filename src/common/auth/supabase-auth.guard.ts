@@ -12,6 +12,11 @@ export class SupabaseAuthGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const token = request.headers.authorization?.match(/^Bearer (.+)$/i)?.[1];
     if (!token) this.unauthorized();
+    request.authUser = await this.authenticate(token);
+    return true;
+  }
+
+  async authenticate(token: string): Promise<AuthenticatedUser> {
     let response: Response;
     try {
       response = await fetch(`${this.config.getOrThrow<string>('SUPABASE_URL')}/auth/v1/user`, {
@@ -31,13 +36,12 @@ export class SupabaseAuthGuard implements CanActivate {
     };
     if (!user || typeof user.id !== 'string' || !/^[0-9a-f-]{36}$/i.test(user.id))
       this.unavailable();
-    request.authUser = {
+    return {
       id: user.id,
       email: user.email ?? null,
       phone: user.phone ?? null,
       ...(user.app_metadata?.role === 'ADMIN' ? { role: 'ADMIN' as const } : {}),
     };
-    return true;
   }
 
   private unauthorized(): never {

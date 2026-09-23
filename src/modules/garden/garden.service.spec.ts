@@ -18,10 +18,11 @@ describe('GardenService care events', () => {
     };
     const findFirst = jest.fn().mockResolvedValue(plant);
     const tx = {
+      $executeRaw: jest.fn(),
       plantRecommendation: { updateMany: jest.fn() },
       notification: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       careEvent: { create: jest.fn().mockResolvedValue({}) },
-      gardenPlant: { update: jest.fn().mockResolvedValue({}) },
+      gardenPlant: { findFirstOrThrow: findFirst, update: jest.fn().mockResolvedValue({}) },
       careReminder: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     };
     const prisma = {
@@ -55,4 +56,13 @@ describe('GardenService care events', () => {
       expect.any(Date),
     );
   });
+  it('deduplicates a retried watering and does not recalculate or write again', async () => {
+    const plant = { id: 'p', wateringDays: 7, lastWateredAt: null, careEvents: [] };
+    const tx = { $executeRaw: jest.fn(), careEvent: { findUnique: jest.fn().mockResolvedValue({ plantId: 'p', type: 'WATER' }), create: jest.fn() } };
+    const prisma = { gardenPlant: { findFirst: jest.fn().mockResolvedValue(plant) }, $transaction: jest.fn((fn: (v: typeof tx) => unknown) => fn(tx)) } as unknown as PrismaService;
+    const service = new GardenService(prisma, {} as never, {} as never, {} as never, { invalidate: jest.fn() } as never);
+    await service.care('u', 'p', { type: CareAction.WATER, clientActionId: 'action-1' });
+    expect(tx.careEvent.create).not.toHaveBeenCalled();
+  });
+
 });

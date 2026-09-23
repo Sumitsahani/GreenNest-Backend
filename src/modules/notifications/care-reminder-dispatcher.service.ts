@@ -1,3 +1,4 @@
+import { wateringEvidence } from '../garden/watering-engine';
 import {
   Injectable,
   Logger,
@@ -22,6 +23,7 @@ export class CareReminderDispatcherService
 {
   private readonly logger = new Logger(CareReminderDispatcherService.name);
   private dispatching = false;
+  private cursor: string | undefined;
   private timer?: ReturnType<typeof setInterval>;
 
   constructor(
@@ -57,21 +59,22 @@ export class CareReminderDispatcherService
 
   private async dispatchBatch(): Promise<void> {
     const now = new Date();
-    const candidateCutoff = new Date(now.getTime() + 2 * 86_400_000);
+
     const reminders = await this.prisma.careReminder.findMany({
       where: {
         enabled: true,
         type: CareType.WATER,
         notificationCount: { lt: 3 },
-        OR: [{ scheduledAt: { lte: candidateCutoff } }, { snoozedUntil: { lte: now } }],
         plant: {
           lifecycleStatus: { in: [PlantLifecycleStatus.ACTIVE, PlantLifecycleStatus.MOVED] },
         },
       },
-      include: { plant: true },
-      orderBy: { scheduledAt: 'asc' },
-      take: 250,
+      include: { plant: { include: wateringEvidence } },
+      orderBy: { id: 'asc' },
+      ...(this.cursor ? { cursor: { id: this.cursor }, skip: 1 } : {}),
+      take: 500,
     });
+    this.cursor = reminders.length === 500 ? reminders[reminders.length - 1]!.id : undefined;
     const userIds = [...new Set(reminders.map((reminder) => reminder.plant.userId))];
     for (const userId of userIds) {
       const settings = await this.prisma.userSettings.findUnique({ where: { userId } });
@@ -88,6 +91,7 @@ export class CareReminderDispatcherService
       const eligible: typeof reminders = [];
       for (const reminder of unique) {
         const smart = await this.weatherCare.createReminder({
+          ...reminder.plant,
           id: reminder.plant.id,
           name: reminder.plant.name,
           location: reminder.plant.location,
@@ -101,6 +105,7 @@ export class CareReminderDispatcherService
           reminder,
         });
         if (
+          smart.wateringState.wateringStatus !== 'SKIP' &&
           canDeliverCare({
             now,
             dueAt: smart.scheduledAt,
@@ -132,6 +137,11 @@ export class CareReminderDispatcherService
             ? `${eligible.length} प्राथमिकता वाली मिट्टी की जाँच करें${locations.length ? ` — ${locations.slice(0, 2).join(' और ')}` : ''}। केवल छोड़े गए पौधों को चिह्नित करें।`
             : `Review ${eligible.length} prioritized soil checks${locations.length ? ` in ${locations.slice(0, 2).join(' and ')}` : ''}. Mark only the plants you skipped.`;
       const claimedIds = await this.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${userId}, 0))`;
+        const previous = await tx.notification.findFirst({ where: { userId, type: 'GARDEN_CARE_BATCH' }, orderBy: { createdAt: 'desc' } });
+        const localDay = (date: Date): string => new Intl.DateTimeFormat('en-CA', { timeZone: settings?.careTimezone ?? 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
+        if (previous && localDay(previous.createdAt) === localDay(now)) return [];
+
         const ids: string[] = [];
         for (const reminder of eligible) {
           const claimed = await tx.careReminder.updateMany({

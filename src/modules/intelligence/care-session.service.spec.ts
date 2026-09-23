@@ -14,6 +14,7 @@ describe('CareSessionService', () => {
       .fn()
       .mockImplementation(({ data }) => ({ id: `event-${data.plantId}` }));
     const tx = {
+      $executeRaw: jest.fn(),
       careSession: {
         create: jest.fn().mockResolvedValue({ id: 'session-1' }),
         update: jest.fn().mockResolvedValue({ id: 'session-1', items: [] }),
@@ -23,7 +24,7 @@ describe('CareSessionService', () => {
         create: jest.fn().mockImplementation(({ data }) => ({ id: `care-${data.plantId}` })),
       },
       plantEvent: { create: eventCreate },
-      gardenPlant: { update: jest.fn() },
+      gardenPlant: { findMany: jest.fn().mockResolvedValue(plants), update: jest.fn() },
       careReminder: { updateMany: jest.fn() },
       plantRecommendation: { updateMany: jest.fn() },
       notification: { updateMany: jest.fn() },
@@ -70,4 +71,31 @@ describe('CareSessionService', () => {
     ).rejects.toThrow();
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
+  it('replays an existing client action without duplicating any watering', async () => {
+    const session = { id: 'action-1', userId: 'u', items: [{ plantId: 'p', status: 'COMPLETED' }] };
+    const tx = { $executeRaw: jest.fn(), careSession: { findUnique: jest.fn().mockResolvedValue(session), create: jest.fn() } };
+    const prisma = { gardenPlant: { findMany: jest.fn().mockResolvedValue([{ id: 'p' }]) }, $transaction: jest.fn((fn: (v: typeof tx) => unknown) => fn(tx)) } as unknown as PrismaService;
+    const service = new CareSessionService(prisma, { invalidate: jest.fn() } as never);
+    expect(await service.complete('u', { actionType: CareType.WATER, plantIds: ['p'], clientActionId: 'action-1' })).toBe(session);
+    expect(tx.careSession.create).not.toHaveBeenCalled();
+    session.userId = 'another-user';
+    await expect(service.complete('u', { actionType: CareType.WATER, plantIds: ['p'], clientActionId: 'action-1' })).rejects.toThrow();
+  });
+
+  it('corrects only the selected skipped plant and preserves the other session items', async () => {
+    const now = new Date();
+    const session = { id: 's', userId: 'u', status: 'COMPLETED', completedAt: now, items: ['a', 'b'].map(plantId => ({ plantId, status: 'COMPLETED', caredAt: now, careEventId: `care-${plantId}`, eventId: `event-${plantId}`, plant: { lastWateredAt: now } })) };
+    const deleted = jest.fn();
+    const update = jest.fn().mockResolvedValue({ items: [] });
+    const tx = { $executeRaw: jest.fn(), careSession: { findFirstOrThrow: jest.fn().mockResolvedValue(session), update },
+      careEvent: { deleteMany: deleted, findFirst: jest.fn().mockResolvedValue(null) },
+      gardenPlant: { findUniqueOrThrow: jest.fn().mockResolvedValue({ wateringDays: 7, lastWateredAt: now, careEvents: [] }), update: jest.fn() },
+      careReminder: { updateMany: jest.fn() }, plantEvent: { create: jest.fn() }, careSessionItem: { updateMany: jest.fn() }, engagementEvent: { create: jest.fn() } };
+    const prisma = { careSession: { findFirst: jest.fn().mockResolvedValue(session) }, $transaction: jest.fn((fn: (v: typeof tx) => unknown) => fn(tx)) } as unknown as PrismaService;
+    await new CareSessionService(prisma, { invalidate: jest.fn() } as never).undo('u', 's', ['a']);
+    expect(deleted).toHaveBeenCalledTimes(1);
+    expect(deleted).toHaveBeenCalledWith({ where: { id: 'care-a', plantId: 'a' } });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'COMPLETED' }) }));
+  });
+
 });

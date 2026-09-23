@@ -1,3 +1,4 @@
+import { WeatherCareService } from '../garden/weather-care.service';
 import { Module } from '@nestjs/common';
 import { SupabaseAuthGuard } from '../../common/auth/supabase-auth.guard';
 import { IntelligenceController } from './intelligence.controller';
@@ -11,6 +12,7 @@ import { CareSessionService } from './care-session.service';
 @Module({
   controllers: [IntelligenceController],
   providers: [
+    WeatherCareService,
     PlantStateService,
     NextBestActionService,
     UserGardeningProfileService,
@@ -20,6 +22,7 @@ import { CareSessionService } from './care-session.service';
     SupabaseAuthGuard,
   ],
   exports: [
+    CareSessionService,
     PlantStateService,
     NextBestActionService,
     UserGardeningProfileService,

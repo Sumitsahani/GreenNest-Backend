@@ -1,10 +1,11 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Query, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import type { CareReminder } from '@prisma/client';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, type AuthenticatedUser } from '../../common/auth/authenticated-user';
 import { SupabaseAuthGuard } from '../../common/auth/supabase-auth.guard';
 import {
   AddCareEventDto,
+  WateringContextDto,
   CreatePlantDto,
   UpdatePlantDto,
   CreateReminderDto,
@@ -41,8 +42,8 @@ export class GardenController {
   ): Promise<GardenPlantResponse> {
     return this.garden.respondCare(user.id, id, dto);
   }
-  @Get() list(@CurrentUser() user: AuthenticatedUser): Promise<GardenPlantResponse[]> {
-    return this.garden.list(user.id);
+  @Get() list(@CurrentUser() user: AuthenticatedUser, @Query('page') page?: string): Promise<GardenPlantResponse[]> {
+    return this.garden.list(user.id, page === undefined ? undefined : Number(page));
   }
   @Post() create(
     @CurrentUser() user: AuthenticatedUser,
@@ -64,6 +65,14 @@ export class GardenController {
     @Param('id') id: string,
   ): Promise<SmartCareReminder> {
     return this.garden.smartReminder(user.id, id);
+  }
+  @Post(':id/watering/correction')
+  wateringCorrection(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() dto: WateringContextDto): ReturnType<GardenService['wateringCorrection']> {
+    return this.garden.wateringCorrection(user.id, id, dto);
+  }
+  @Get(':id/watering-state')
+  async wateringState(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string): Promise<import('./watering-engine').WateringState> {
+    return (await this.garden.smartReminder(user.id, id)).wateringState;
   }
   @Get(':id') detail(
     @CurrentUser() user: AuthenticatedUser,

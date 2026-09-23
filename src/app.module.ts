@@ -1,3 +1,4 @@
+import { AdminModule } from './modules/admin/admin.module';
 import { MiddlewareConsumer, Module, type NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
@@ -42,6 +43,7 @@ import { GardenerModule } from './modules/gardener/gardener.module';
       ],
     }),
     DatabaseModule,
+    AdminModule,
     HealthModule,
     AuthModule,
     CatalogModule,

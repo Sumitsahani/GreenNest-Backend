@@ -636,7 +636,7 @@ export class PlantIntelligenceService {
       },
       orderBy: { createdAt: 'desc' },
     });
-    if (existing) {
+    if (existing && !state.wateringState) {
       if (existing.status !== RecommendationStatus.GENERATED) return existing;
       return this.prisma.plantRecommendation.update({
         where: { id: existing.id },
@@ -677,6 +677,7 @@ export class PlantIntelligenceService {
         })),
     );
     const decision = this.actions.decide({
+      wateringState: state.wateringState,
       health: state.health,
       lastWateredAt: state.lastWateredAt,
       nextWateringAt: state.nextWateringAt,
@@ -685,7 +686,9 @@ export class PlantIntelligenceService {
       historicalWarnings,
       environment,
     });
+    if (existing && existing.action === decision.action && existing.reason === decision.reason && ['GENERATED', 'SHOWN', 'ACCEPTED'].includes(existing.status)) return existing;
     return this.prisma.$transaction(async (tx) => {
+      if (state.wateringState) await tx.plantRecommendation.updateMany({ where: { plantId, userId, action: { in: ['WATER', 'SKIP_WATERING', 'MONITOR', 'NO_ACTION'] }, status: { in: ['GENERATED', 'SHOWN', 'ACCEPTED'] } }, data: { status: 'DISMISSED', respondedAt: new Date(), userResponseReason: 'Recalculated from current plant evidence' } });
       const recommendation = await tx.plantRecommendation.create({
         data: {
           userId,

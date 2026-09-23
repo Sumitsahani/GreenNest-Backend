@@ -1,3 +1,4 @@
+import { calculateWatering, wateringCheckAt, type WateringState } from '../garden/watering-engine';
 import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   MemoryStatus,
@@ -16,6 +17,7 @@ import { BusinessException } from '../../common/exceptions/business.exception';
 import { PrismaService } from '../../database/prisma.service';
 
 export interface PlantState {
+  wateringState?: WateringState;
   identity: {
     id: string;
     userId: string;
@@ -97,7 +99,9 @@ export class PlantStateService {
     const lastWateredAt =
       wateringHistory[0]?.caredAt ?? plant.lastWateredAt ?? null;
 
+    const wateringState = calculateWatering(plant);
     return {
+      wateringState,
       identity: {
         id: plant.id,
         userId: plant.userId,
@@ -115,7 +119,7 @@ export class PlantStateService {
       },
       health: plant.health,
       lastWateredAt,
-      nextWateringAt: plant.nextWateringAt,
+      nextWateringAt: wateringCheckAt(wateringState),
       wateringDays: plant.wateringDays,
       wateringHistory,
       fertilizingHistory: plant.careEvents.filter(

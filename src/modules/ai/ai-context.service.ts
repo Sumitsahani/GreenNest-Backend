@@ -56,7 +56,7 @@ export class AiContextService {
       : [];
     const gardenLines = garden.map(
       (plant) =>
-        `${plant.name}${plant.species ? ` (${plant.species})` : ''}: ${plant.location}, health ${plant.health}/100, scheduled soil check (not a watering instruction) ${plant.nextWateringAt.toISOString().slice(0, 10)}`,
+        `${plant.name}${plant.species ? ` (${plant.species})` : ''}: ${plant.location}, health ${plant.health}/100; inspect individual watering state before advising on dates`,
     );
     const memoryLines = memories.map(
       (item) =>
@@ -94,6 +94,7 @@ export class AiContextService {
               .slice(0, 3)
               .map(({ analysis, source, createdAt }) => ({ analysis, source, createdAt })),
           )} (metadata only; photos are not attached here)`,
+          `Authoritative watering state=${JSON.stringify(plantState.wateringState ?? null)}. Use these recorded windows and sources; never invent watering events or exact dates.`,
           `lastWatered=${plantState.lastWateredAt?.toISOString() ?? 'unknown'}, nextWatering=${plantState.nextWateringAt.toISOString()}`,
           `learnedSignals=${
             plantState.learnedSignals

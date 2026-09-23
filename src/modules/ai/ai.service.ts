@@ -1,3 +1,4 @@
+import { calculateWatering, wateringEvidence } from '../garden/watering-engine';
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { AiMessageRole, type AiConversation, type AiMessage } from '@prisma/client';
 import { ErrorCode } from '../../common/constants/error-code';
@@ -43,18 +44,19 @@ export class AiService {
     weather?: { temperature?: number; humidity?: number; weather?: string },
   ): Promise<{ title: string; message: string; urgentCount: number }> {
     const plants = await this.prisma.gardenPlant.findMany({
-      where: { userId },
+      where: { userId, lifecycleStatus: { in: ['ACTIVE', 'MOVED'] } },
+      include: wateringEvidence,
       orderBy: { nextWateringAt: 'asc' },
-      take: 12,
+      take: 500,
     });
     const now = new Date();
-    const due = plants.filter((plant) => plant.nextWateringAt <= now);
+    const due = plants.filter((plant) => ['DUE', 'OVERDUE', 'INSPECT_FIRST', 'UNCERTAIN'].includes(calculateWatering(plant, now).wateringStatus));
     const hottest = (weather?.temperature ?? 0) >= 32;
     const message = !plants.length
       ? 'Add your first plant to receive a personalized daily care briefing.'
       : due.length
         ? `${due.map((plant) => plant.name.trim()).join(', ')} ${due.length === 1 ? 'is' : 'are'} due for a soil check today.${hottest ? ' Hot weather may dry pots faster, but check soil before watering.' : ''}`
-        : `All ${plants.length} plants are on schedule. Next check: ${plants[0]?.name.trim()} on ${plants[0]?.nextWateringAt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}.${weather?.humidity !== undefined && weather.humidity > 75 ? ' High humidity can slow soil drying.' : ''}`;
+        : `No watering action is needed for your ${plants.length} plants right now. Check individual soil observations when conditions change.`;
     return {
       title: due.length ? 'Care needed today' : 'Your garden is on track',
       message,
@@ -175,7 +177,7 @@ export class AiService {
       }
       const careAction = persisted.replay
         ? null
-        : await this.careActions.apply(userId, dto.plantId, content);
+        : await this.careActions.apply(userId, dto.plantId, content, userMessage.id);
       const extracted = persisted.replay ? [] : this.extractor.extract(content, dto.plantId);
       if (extracted.length) await this.memories.apply(userId, extracted);
       if (!persisted.replay)

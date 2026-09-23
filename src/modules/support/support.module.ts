@@ -6,6 +6,7 @@ import { SupportAgentGuard } from './support-agent.guard';
 import { SupportService } from './support.service';
 
 @Module({
+  exports: [SupportService],
   controllers: [SupportController, SupportAdminController],
   providers: [SupportService, SupabaseAuthGuard, SupportAgentGuard],
 })

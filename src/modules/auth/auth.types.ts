@@ -1,4 +1,5 @@
 export interface SupabaseUser {
+  app_metadata?: { role?: string };
   id: string;
   phone?: string;
   email?: string;
@@ -26,6 +27,7 @@ export interface SupabaseEmailSignUpResponse {
 }
 
 export interface AuthUserResponse {
+  role?: 'ADMIN';
   id: string;
   phone: string | null;
   email: string | null;

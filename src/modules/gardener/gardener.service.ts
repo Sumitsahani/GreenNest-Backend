@@ -1,3 +1,5 @@
+import { Optional } from '@nestjs/common';
+import { AdminAccessService } from '../admin/admin-access.service';
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { BookingStatus, CareType, PlantEventType, PlantOutcomeType, Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
@@ -15,12 +17,51 @@ import type {
   GardenerChatDto,
 } from './gardener.dto';
 import { canWork, closedJobs, jobTransitions } from './job-policy';
-import type { Gardener, ServiceBooking, GardeningService, BookingActivity, GardenerPayout } from '@prisma/client';
+import { TrackingEvents } from './tracking-events.service';
+import type {
+  Gardener,
+  ServiceBooking,
+  GardeningService,
+  BookingActivity,
+  GardenerPayout,
+} from '@prisma/client';
 import type { PlantState } from '../intelligence/plant-state.service';
 
-type JobCase = Pick<PlantState, 'location' | 'health' | 'lastWateredAt' | 'healthHistory' | 'treatments' | 'outcomes'> & { id: string; name: string; species: string | null };
-type JobDetail = Pick<ServiceBooking, 'id' | 'bookingNumber' | 'status' | 'scheduledAt' | 'price' | 'customerName' | 'notes' | 'photoUrls' | 'completionNotes' | 'rating' | 'issue'> & { viewerId: string; service: GardeningService; address: { postalCode: string; fullAddress?: string; label?: string } | null; activities: BookingActivity[]; plants: JobCase[] };
-type JobSummary = Pick<ServiceBooking, 'id' | 'bookingNumber' | 'scheduledAt' | 'status' | 'customerName' | 'notes' | 'price' | 'plantIds'> & { service: Pick<GardeningService, 'title' | 'durationMinutes'> };
+type JobCase = Pick<
+  PlantState,
+  'location' | 'health' | 'lastWateredAt' | 'healthHistory' | 'treatments' | 'outcomes'
+> & { id: string; name: string; species: string | null };
+type JobDetail = Pick<
+  ServiceBooking,
+  | 'id'
+  | 'bookingNumber'
+  | 'status'
+  | 'scheduledAt'
+  | 'price'
+  | 'customerName'
+  | 'notes'
+  | 'photoUrls'
+  | 'completionNotes'
+  | 'rating'
+  | 'issue'
+> & {
+  viewerId: string;
+  service: GardeningService;
+  address: { postalCode: string; fullAddress?: string; label?: string } | null;
+  activities: BookingActivity[];
+  plants: JobCase[];
+};
+type JobSummary = Pick<
+  ServiceBooking,
+  | 'id'
+  | 'bookingNumber'
+  | 'scheduledAt'
+  | 'status'
+  | 'customerName'
+  | 'notes'
+  | 'price'
+  | 'plantIds'
+> & { service: Pick<GardeningService, 'title' | 'durationMinutes'> };
 
 function fail(message: string, status: HttpStatus = HttpStatus.CONFLICT): never {
   throw new BusinessException(
@@ -38,11 +79,23 @@ export class GardenerService {
     private readonly db: PrismaService,
     private readonly states: PlantStateService,
     private readonly ai: AiResponseService,
+    private readonly trackingEvents: TrackingEvents,
+    @Optional() private readonly adminAccess?: AdminAccessService,
   ) {}
 
-  async access(user: AuthenticatedUser): Promise<{ userId: string; role: 'ADMIN' | 'GARDENER' | 'CUSTOMER'; profile: Gardener | null }> {
+  async access(
+    user: AuthenticatedUser,
+  ): Promise<{
+    userId: string;
+    role: 'ADMIN' | 'GARDENER' | 'CUSTOMER';
+    profile: Gardener | null;
+  }> {
     const profile = await this.db.gardener.findUnique({ where: { userId: user.id } });
-    return { userId: user.id, role: user.role === 'ADMIN' ? 'ADMIN' : profile ? 'GARDENER' : 'CUSTOMER', profile };
+    return {
+      userId: user.id,
+      role: user.role === 'ADMIN' ? 'ADMIN' : profile ? 'GARDENER' : 'CUSTOMER',
+      profile,
+    };
   }
   async profile(userId: string, requireComplete = false): Promise<Gardener> {
     const row = await this.db.gardener.findUnique({ where: { userId } });
@@ -104,7 +157,16 @@ export class GardenerService {
       take: 25,
     });
   }
-  async dashboard(userId: string): Promise<{ today: number; pending: number; accepted: number; completed: number; earnings: Prisma.Decimal | null; name: string }> {
+  async dashboard(
+    userId: string,
+  ): Promise<{
+    today: number;
+    pending: number;
+    accepted: number;
+    completed: number;
+    earnings: Prisma.Decimal | null;
+    name: string;
+  }> {
     const g = await this.profile(userId, true);
     const local = new Date(Date.now() + 330 * 60_000);
     const dayStart = new Date(
@@ -133,7 +195,11 @@ export class GardenerService {
     ]);
     return { today, pending, accepted, completed, earnings: earnings._sum.net, name: g.name };
   }
-  private async authorizedJob(userId: string, id: string, customer = false): Promise<ServiceBooking & { service: GardeningService }> {
+  private async authorizedJob(
+    userId: string,
+    id: string,
+    customer = false,
+  ): Promise<ServiceBooking & { service: GardeningService }> {
     const g = customer ? null : await this.profile(userId, true);
     const job = await this.db.serviceBooking.findFirst({
       where: { id, ...(customer ? { userId } : { gardenerId: g!.id }) },
@@ -155,7 +221,10 @@ export class GardenerService {
       }),
       permitted
         ? this.db.bookingActivity.findMany({
-            where: { bookingId: id, kind: { notIn: ['TRACKING_LOCATION', 'TRACKING_DESTINATION'] } },
+            where: {
+              bookingId: id,
+              kind: { notIn: ['TRACKING_LOCATION', 'TRACKING_DESTINATION'] },
+            },
             orderBy: { createdAt: 'desc' },
             take: 100,
           })
@@ -199,7 +268,12 @@ export class GardenerService {
       issue: job.issue,
     };
   }
-  async activityPage(userId: string, id: string, page: number, customer: boolean): Promise<BookingActivity[]> {
+  async activityPage(
+    userId: string,
+    id: string,
+    page: number,
+    customer: boolean,
+  ): Promise<BookingActivity[]> {
     const job = await this.authorizedJob(userId, id, customer);
     if (
       !customer &&
@@ -213,7 +287,13 @@ export class GardenerService {
       take: 50,
     });
   }
-  async act(userId: string, id: string, action: string, dto: JobActionDto, customer = false): Promise<{ status: BookingStatus; saved: boolean; replay: boolean }> {
+  async act(
+    userId: string,
+    id: string,
+    action: string,
+    dto: JobActionDto,
+    customer = false,
+  ): Promise<{ status: BookingStatus; saved: boolean; replay: boolean }> {
     const original = await this.authorizedJob(userId, id, customer);
     const customerActions = ['confirm', 'issue', 'outcome', 'message', 'cancel', 'reschedule'];
     const gardenerActions = [
@@ -240,7 +320,7 @@ export class GardenerService {
         fail('Photo, phase and plant are required.', HttpStatus.BAD_REQUEST);
       this.photoUrl(dto.photoUrl, userId);
     }
-    return this.db.$transaction(
+    const result = await this.db.$transaction(
       async (tx) => {
         await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended('gardener-allocation', 0))::text`;
         const job = await tx.serviceBooking.findUniqueOrThrow({
@@ -405,8 +485,15 @@ export class GardenerService {
           });
         }
         if (action === 'photo') {
-          const duplicate = await tx.bookingActivity.findFirst({ where: { bookingId: id, kind: 'photo', data: { path: ['input', 'photoUrl'], equals: dto.photoUrl! } } });
-          if (duplicate) fail('This photo is already recorded. Capture a new photo for fresh evidence.');
+          const duplicate = await tx.bookingActivity.findFirst({
+            where: {
+              bookingId: id,
+              kind: 'photo',
+              data: { path: ['input', 'photoUrl'], equals: dto.photoUrl! },
+            },
+          });
+          if (duplicate)
+            fail('This photo is already recorded. Capture a new photo for fresh evidence.');
           await tx.plantPhoto.create({
             data: {
               plantId: dto.plantId!,
@@ -500,7 +587,9 @@ export class GardenerService {
         }
         await tx.serviceBooking.update({ where: { id }, data: update });
         if (['arrive', 'complete', 'cancel', 'reject', 'reschedule'].includes(action))
-          await tx.bookingActivity.deleteMany({ where: { bookingId: id, kind: 'TRACKING_LOCATION' } });
+          await tx.bookingActivity.deleteMany({
+            where: { bookingId: id, kind: 'TRACKING_LOCATION' },
+          });
         if (action === 'confirm' && dto.rating) {
           const average = await tx.serviceBooking.aggregate({
             where: { gardenerId: job.gardenerId, rating: { not: null } },
@@ -540,6 +629,8 @@ export class GardenerService {
       },
       { timeout: 20_000 },
     );
+    this.trackingEvents.publish(id);
+    return result;
   }
   photoUrl(value: string, userId: string): void {
     const url = new URL(value);
@@ -550,7 +641,23 @@ export class GardenerService {
     )
       fail('Use a photo uploaded by your account.', HttpStatus.FORBIDDEN);
   }
-  async earnings(userId: string, page: number): Promise<{ rows: GardenerPayout[]; totals: { _sum: { gross: Prisma.Decimal | null; net: Prisma.Decimal | null; platformFee: Prisma.Decimal | null }; _count: number }; paid: Prisma.Decimal | null; pending: Prisma.Decimal | null; unconfiguredCount: number }> {
+  async earnings(
+    userId: string,
+    page: number,
+  ): Promise<{
+    rows: GardenerPayout[];
+    totals: {
+      _sum: {
+        gross: Prisma.Decimal | null;
+        net: Prisma.Decimal | null;
+        platformFee: Prisma.Decimal | null;
+      };
+      _count: number;
+    };
+    paid: Prisma.Decimal | null;
+    pending: Prisma.Decimal | null;
+    unconfiguredCount: number;
+  }> {
     const g = await this.profile(userId, true);
     const [rows, totals, paid, pending, unresolved] = await Promise.all([
       this.db.gardenerPayout.findMany({
@@ -620,15 +727,44 @@ export class GardenerService {
   assertAdmin(user: AuthenticatedUser): void {
     if (user.role !== 'ADMIN') fail('Admin permission required.', HttpStatus.FORBIDDEN);
   }
-  async verify(user: AuthenticatedUser, id: string, verified: boolean): Promise<Gardener> {
+  async verify(
+    user: AuthenticatedUser,
+    id: string,
+    verified: boolean,
+    reason = 'Gardener verification updated',
+  ): Promise<Gardener> {
     this.assertAdmin(user);
-    return this.db.gardener.update({
-      where: { id },
-      data: { verified, ...(!verified ? { available: false } : {}) },
+    if (!this.adminAccess) fail('Admin permissions unavailable.', HttpStatus.FORBIDDEN);
+    await this.adminAccess.require(user, 'gardeners.approve');
+    return this.db.$transaction(async (tx) => {
+      const before = await tx.gardener.findUniqueOrThrow({ where: { id } });
+      const after = await tx.gardener.update({
+        where: { id },
+        data: { verified, ...(!verified ? { available: false } : {}) },
+      });
+      await tx.adminAuditLog.create({
+        data: {
+          actorId: user.id,
+          action: 'gardeners.verify',
+          entity: 'gardeners',
+          entityId: id,
+          reason,
+          before: json({ verified: before.verified }),
+          after: json({ verified }),
+        },
+      });
+      return after;
     });
   }
-  async payout(user: AuthenticatedUser, id: string, reference: string): Promise<GardenerPayout> {
+  async payout(
+    user: AuthenticatedUser,
+    id: string,
+    reference: string,
+    reason = 'Payout recorded',
+  ): Promise<GardenerPayout> {
     this.assertAdmin(user);
+    if (!this.adminAccess) fail('Admin permissions unavailable.', HttpStatus.FORBIDDEN);
+    await this.adminAccess.require(user, 'finance.update');
     if (!reference.trim()) fail('A payment reference is required.', HttpStatus.BAD_REQUEST);
     return this.db.$transaction(async (tx) => {
       const row = await tx.gardenerPayout.findUniqueOrThrow({
@@ -656,6 +792,17 @@ export class GardenerService {
             type: 'GARDENER_PAYOUT',
           },
         });
+      await tx.adminAuditLog.create({
+        data: {
+          actorId: user.id,
+          action: 'payouts.paid',
+          entity: 'payouts',
+          entityId: id,
+          reason,
+          before: json({ status: row.status }),
+          after: json({ status: 'PAID', reference }),
+        },
+      });
       return tx.gardenerPayout.findUniqueOrThrow({ where: { id } });
     });
   }

@@ -1,3 +1,4 @@
+import type { WateringState } from '../garden/watering-engine';
 import { Injectable } from '@nestjs/common';
 import {
   RecommendationAction,
@@ -5,6 +6,7 @@ import {
 } from '@prisma/client';
 
 export interface DecisionInput {
+  wateringState?: WateringState;
   health: number;
   lastWateredAt: Date | null;
   nextWateringAt: Date;
@@ -36,6 +38,14 @@ export interface NextBestAction {
 export class NextBestActionService {
   decide(input: DecisionInput): NextBestAction {
     const now = input.now ?? new Date();
+    if (input.wateringState) {
+      const state = input.wateringState;
+      const action = input.health < 60 || ['INSPECT_FIRST', 'UNCERTAIN'].includes(state.wateringStatus) ? RecommendationAction.INSPECT
+        : ['DUE', 'OVERDUE'].includes(state.wateringStatus) ? RecommendationAction.WATER
+        : RecommendationAction.NO_ACTION;
+      return { action, priority: input.health < 60 ? RecommendationPriority.HIGH : action === RecommendationAction.NO_ACTION ? RecommendationPriority.LOW : RecommendationPriority.MEDIUM,
+        confidence: state.wateringNeedConfidence, reason: `${state.title}. ${state.reasons.join(' ')}`, signals: [state.calculationVersion, state.wateringStatus] };
+    }
     const daysSinceWatering = input.lastWateredAt
       ? Math.max(
           0,
@@ -44,8 +54,8 @@ export class NextBestActionService {
       : null;
     const soilWet = input.learnedSignals.find(
       (signal) =>
-        /soil_(condition|wet)|soil_drying/i.test(signal.key) &&
-        /wet|moist|day/i.test(signal.value) &&
+        /soil_(condition|wet)/i.test(signal.key) &&
+        /wet|moist/i.test(signal.value) &&
         signal.confidence >= 0.8,
     );
     const wateringWarning = input.historicalWarnings?.find(
