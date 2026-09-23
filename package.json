@@ -34,10 +34,12 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.2",
     "helmet": "^8.1.0",
+    "ioredis": "^6.0.0",
     "joi": "^17.13.3",
     "nodemailer": "^10.0.8",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.2"
+    "rxjs": "^7.8.2",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
@@ -47,6 +49,7 @@
     "@types/node": "^22.0.0",
     "@types/nodemailer": "^8.0.1",
     "@types/supertest": "^6.0.0",
+    "@types/ws": "^8.18.1",
     "eslint": "^9.39.0",
     "jest": "^30.0.0",
     "openapi-typescript": "^7.10.0",

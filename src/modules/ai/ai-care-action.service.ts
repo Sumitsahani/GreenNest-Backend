@@ -1,3 +1,5 @@
+import { Optional } from '@nestjs/common';
+import { CareSessionService } from '../intelligence/care-session.service';
 import { Injectable } from '@nestjs/common';
 import { PlantLifecycleStatus } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
@@ -55,7 +57,24 @@ export function parseCareDate(
   message: string,
   mode: 'PAST' | 'FUTURE',
   now = new Date(),
+  timezone?: string,
 ): Date | null {
+  if (timezone) {
+    const formatter = new Intl.DateTimeFormat('en-GB', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+    const parts = (date: Date): Record<string, number> => Object.fromEntries(formatter.formatToParts(date).filter(p => p.type !== 'literal').map(p => [p.type, Number(p.value)]));
+    const local = parts(now);
+    const clock = new Date(local.year!, local.month! - 1, local.day, local.hour, local.minute, local.second, now.getMilliseconds());
+    const parsed = parseCareDate(message, mode, clock);
+    if (!parsed) return null;
+    const target = Date.UTC(parsed.getFullYear(), parsed.getMonth(), parsed.getDate(), parsed.getHours(), parsed.getMinutes(), parsed.getSeconds(), parsed.getMilliseconds());
+    let instant = target;
+    for (let i = 0; i < 3; i++) {
+      const view = parts(new Date(instant));
+      const shown = Date.UTC(view.year!, view.month! - 1, view.day, view.hour, view.minute, view.second, parsed.getMilliseconds());
+      instant += target - shown;
+    }
+    return new Date(instant);
+  }
   const lower = message.toLowerCase();
   if (/\b(?:today|aaj)\b/.test(lower)) return new Date(now);
   if (/\byesterday\b/.test(lower) || (mode === 'PAST' && /\bkal\b/.test(lower))) {
@@ -122,8 +141,9 @@ function directRescheduleRequest(message: string): boolean {
   );
 }
 
-function dateLabel(value: Date, language: ResponseLanguage): string {
+function dateLabel(value: Date, language: ResponseLanguage, timezone?: string): string {
   return value.toLocaleDateString(language === 'HINDI' ? 'hi-IN' : 'en-IN', {
+    timeZone: timezone,
     day: 'numeric',
     month: 'long',
     year: 'numeric',
@@ -135,13 +155,30 @@ export class AiCareActionService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly garden: GardenService,
+    @Optional() private readonly sessions?: CareSessionService,
   ) {}
 
   async apply(
     userId: string,
     explicitPlantId: string | undefined,
     message: string,
+    clientActionId?: string,
   ): Promise<AiCareActionResult | null> {
+    const wholeGarden = /^i (?:have )?(?:just )?watered (?:all (?:my )?plants|my (?:whole )?garden)(?: today)?[.!]?$/i.test(message.trim());
+    if (wholeGarden && this.sessions) {
+      const plants = await this.prisma.gardenPlant.findMany({ where: { userId, lifecycleStatus: { in: ['ACTIVE', 'MOVED'] } }, select: { id: true } });
+      if (!plants.length) return { reply: 'There are no active plants to record.' };
+      await this.sessions.complete(userId, { actionType: 'WATER', plantIds: plants.map(p => p.id), clientActionId });
+      return { reply: `Recorded your reported watering for ${plants.length} plants. Each pot keeps its own history and estimated soil-check window.` };
+    }
+    const drying = /(?:usually|normally|takes|wait).*?\b(\d{1,2})\s*days?\b/i.exec(message);
+    if (explicitPlantId && drying && !/[?]/.test(message) && /dry|water/i.test(message)) {
+      const days = Number(drying[1]);
+      if (days >= 1 && days <= 60) {
+        await this.garden.wateringCorrection(userId, explicitPlantId, { dryingDays: days });
+        return { reply: `Saved your observation that this pot usually dries in about ${days} days. Future checks will combine it with this plant's history and current soil conditions.` };
+      }
+    }
     const watered = directWateringStatement(message);
     const reschedule = directRescheduleRequest(message);
     if (!watered && !reschedule) return null;
@@ -174,8 +211,10 @@ export class AiCareActionService {
       };
     }
 
+    const settings = await this.prisma.userSettings.findUnique({ where: { userId } });
+    const timezone = settings?.careTimezone ?? 'Asia/Kolkata';
     if (watered) {
-      const caredAt = parseCareDate(message, 'PAST') ?? new Date();
+      const caredAt = parseCareDate(message, 'PAST', new Date(), timezone) ?? new Date();
       if (caredAt.getTime() > Date.now() + 5 * 60_000) {
         return {
           reply:
@@ -189,13 +228,14 @@ export class AiCareActionService {
         plant.id,
         caredAt,
         'Watering recorded from Plant Buddy chat',
+        clientActionId,
       );
       const next = new Date(updated.nextWateringAt);
       return {
         reply:
           language === 'HINGLISH'
-            ? `Done! ${plant.name} ka watering ${dateLabel(caredAt, language)} ke liye record ho gaya. Next soil check ${dateLabel(next, language)} ko hai. Garden, reminder calendar aur care history sync ho gaye hain.`
-            : `Done! I recorded ${plant.name} as watered on ${dateLabel(caredAt, language)}. Its next soil check is ${dateLabel(next, language)}. Your garden, reminder calendar, and care history are synced.`,
+            ? `Done! ${plant.name} ka watering ${dateLabel(caredAt, language, timezone)} ke liye record ho gaya. Next soil check ${dateLabel(next, language, timezone)} ko hai. Garden, reminder calendar aur care history sync ho gaye hain.`
+            : `Done! I recorded ${plant.name} as watered on ${dateLabel(caredAt, language, timezone)}. Its next soil check is ${dateLabel(next, language, timezone)}. Your garden, reminder calendar, and care history are synced.`,
         update: {
           type: 'WATERED',
           plantId: plant.id,
@@ -206,7 +246,7 @@ export class AiCareActionService {
       };
     }
 
-    const scheduledAt = parseCareDate(message, 'FUTURE');
+    const scheduledAt = parseCareDate(message, 'FUTURE', new Date(), timezone);
     if (!scheduledAt) {
       return {
         reply:
@@ -215,9 +255,8 @@ export class AiCareActionService {
             : `Sure - what date should I set for ${plant.name}'s next watering?`,
       };
     }
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    if (scheduledAt.getTime() < today.getTime()) {
+    const calendar = new Intl.DateTimeFormat('sv-SE', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
+    if (calendar.format(scheduledAt) < calendar.format(new Date())) {
       return {
         reply:
           language === 'HINGLISH'
@@ -235,8 +274,8 @@ export class AiCareActionService {
     return {
       reply:
         language === 'HINGLISH'
-          ? `Done! ${plant.name} ki next watering ${dateLabel(next, language)} par set ho gayi. Garden aur reminder calendar dono update ho gaye hain.`
-          : `Done! ${plant.name}'s next watering is set for ${dateLabel(next, language)}. Your garden and reminder calendar are updated.`,
+          ? `Done! ${plant.name} ki next watering ${dateLabel(next, language, timezone)} par set ho gayi. Garden aur reminder calendar dono update ho gaye hain.`
+          : `Done! ${plant.name}'s next watering is set for ${dateLabel(next, language, timezone)}. Your garden and reminder calendar are updated.`,
       update: {
         type: 'WATERING_RESCHEDULED',
         plantId: plant.id,

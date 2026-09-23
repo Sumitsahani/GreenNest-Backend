@@ -1064,3 +1064,39 @@ model AiFeedback {
   @@index([messageId])
   @@map("ai_feedback")
 }
+
+
+// Staff membership is provisioned server-side; public signup cannot create it.
+model AdminStaff {
+  userId String @id @db.Uuid
+  email String @unique
+  role String
+  active Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model AdminAuditLog {
+  id String @id @default(uuid()) @db.Uuid
+  actorId String @db.Uuid
+  action String
+  entity String
+  entityId String
+  before Json?
+  after Json?
+  reason String
+  createdAt DateTime @default(now())
+  @@index([createdAt])
+  @@index([entity, entityId])
+}
+
+model AdminNotificationDraft {
+  id String @id @default(uuid()) @db.Uuid
+  title String
+  message String
+  userId String @db.Uuid
+  status String @default("DRAFT")
+  createdBy String @db.Uuid
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

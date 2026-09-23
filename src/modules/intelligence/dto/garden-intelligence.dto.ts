@@ -4,6 +4,7 @@ import {
   ArrayMaxSize,
   ArrayUnique,
   IsArray,
+  IsDateString,
   IsEnum,
   IsObject,
   IsOptional,
@@ -13,6 +14,9 @@ import {
 } from 'class-validator';
 
 export class CompleteBatchCareDto {
+  @ApiPropertyOptional() @IsOptional() @IsUUID('4') clientActionId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsDateString() occurredAt?: string;
+
   @ApiProperty({ enum: CareType, example: CareType.WATER })
   @IsEnum(CareType)
   actionType!: CareType;
@@ -20,7 +24,7 @@ export class CompleteBatchCareDto {
   @ApiProperty({ type: [String] })
   @IsArray()
   @ArrayUnique()
-  @ArrayMaxSize(250)
+  @ArrayMaxSize(500)
   @IsUUID('4', { each: true })
   plantIds!: string[];
 
@@ -28,7 +32,7 @@ export class CompleteBatchCareDto {
   @IsOptional()
   @IsArray()
   @ArrayUnique()
-  @ArrayMaxSize(250)
+  @ArrayMaxSize(500)
   @IsUUID('4', { each: true })
   skippedPlantIds?: string[];
 
@@ -63,4 +67,8 @@ export class EngagementEventDto {
   @IsOptional()
   @IsObject()
   properties?: Record<string, unknown>;
+}
+
+export class CorrectCareSessionDto {
+  @ApiPropertyOptional({ type: [String] }) @IsOptional() @IsArray() @ArrayUnique() @ArrayMaxSize(500) @IsUUID('4', { each: true }) plantIds?: string[];
 }

@@ -1,3 +1,5 @@
+import { WeatherCareService } from '../garden/weather-care.service';
+import { calculateWatering, wateringEvidence } from '../garden/watering-engine';
 import { Injectable } from '@nestjs/common';
 import {
   EvidenceSource,
@@ -43,6 +45,7 @@ export interface GardenTodayResult {
   totalPlants: number;
   attentionCount: number;
   healthyCount: number;
+  approachingCount: number;
   recoveringCount: number;
   atRiskCount: number;
   zeroAction: boolean;
@@ -86,6 +89,7 @@ export class GardenIntelligenceService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly actions: NextBestActionService,
+    private readonly weather: WeatherCareService = new WeatherCareService(),
   ) {}
 
   invalidate(userId: string): void {
@@ -94,7 +98,8 @@ export class GardenIntelligenceService {
 
   async today(userId: string): Promise<GardenTodayResult> {
     const cached = this.cache.get(userId);
-    if (cached && cached.expiresAt > Date.now()) return cached.value;
+    // Read fresh evidence: correction and memory writes may originate in other modules.
+    void cached;
     const now = new Date();
     const since = new Date(now.getTime() - 30 * 86_400_000);
     const [plants, checkpoints] = await Promise.all([
@@ -104,6 +109,10 @@ export class GardenIntelligenceService {
           lifecycleStatus: { in: [PlantLifecycleStatus.ACTIVE, PlantLifecycleStatus.MOVED] },
         },
         select: {
+          careEvents: wateringEvidence.careEvents,
+          events: wateringEvidence.events,
+          environment: true,
+          latitude: true, longitude: true, weatherLocation: true,
           id: true,
           name: true,
           species: true,
@@ -131,7 +140,7 @@ export class GardenIntelligenceService {
           },
         },
         orderBy: [{ health: 'asc' }, { nextWateringAt: 'asc' }],
-        take: 250,
+        take: 500,
       }),
       this.prisma.recoveryCheckpoint.findMany({
         where: {
@@ -148,11 +157,16 @@ export class GardenIntelligenceService {
       }),
     ]);
 
-    const allItems = plants.map((plant): GardenAttentionItem => {
-      const recommendation = plant.recommendations[0];
+    const wateringStates = await Promise.all(plants.map(async plant => plant.environment === 'OUTDOOR' && plant.latitude != null && plant.longitude != null
+      ? (await this.weather.createReminder(plant)).wateringState : calculateWatering(plant, now)));
+    const allItems = plants.map((plant, index): GardenAttentionItem => {
+      const wateringState = wateringStates[index]!;
+      const saved = plant.recommendations[0];
+      const recommendation = saved && !['WATER', 'SKIP_WATERING', 'MONITOR', 'NO_ACTION'].includes(saved.action) ? saved : undefined;
       const decision =
         recommendation ??
         this.actions.decide({
+          wateringState,
           health: plant.health,
           lastWateredAt: plant.lastWateredAt,
           nextWateringAt: plant.nextWateringAt,
@@ -239,6 +253,7 @@ export class GardenIntelligenceService {
       totalPlants: plants.length,
       attentionCount: items.length,
       healthyCount,
+      approachingCount: wateringStates.filter(state => state.wateringStatus === 'APPROACHING').length,
       recoveringCount: allItems.filter((item) => item.status === 'RECOVERING').length,
       atRiskCount: allItems.filter((item) => item.status === 'AT_RISK').length,
       zeroAction: items.length === 0,

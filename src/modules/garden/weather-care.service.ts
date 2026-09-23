@@ -1,10 +1,11 @@
+import { calculateWatering, wateringCheckAt, type WateringInput, type WateringState } from './watering-engine';
 import { Injectable } from '@nestjs/common';
 import { PlantEnvironment } from '@prisma/client';
 
 export type SmartWateringStatus =
   'CHECK_NOW' | 'CHECK_EARLIER' | 'DELAY_WATERING' | 'ON_SCHEDULE' | 'LOCATION_NEEDED';
 
-export interface PlantWeatherInput {
+export interface PlantWeatherInput extends WateringInput {
   id: string;
   name: string;
   location: string;
@@ -40,6 +41,7 @@ export interface WeatherSnapshot {
 }
 
 export interface SmartCareReminder {
+  wateringState: WateringState;
   id: string;
   plantId: string;
   plantName: string;
@@ -147,91 +149,25 @@ export class WeatherCareService {
     locationMissing = false,
     now = new Date(),
   ): SmartCareReminder {
-    const base = input.lastWateredAt
-      ? new Date(input.lastWateredAt.getTime() + input.wateringDays * 86_400_000)
-      : new Date(input.nextWateringAt);
-    const daysUntilBase = (base.getTime() - now.getTime()) / 86_400_000;
-    const outdoor =
-      input.environment === PlantEnvironment.OUTDOOR ||
-      /balcony|terrace|outdoor|garden|patio|roof|veranda/i.test(input.location);
-    let adjustmentDays = 0;
-    const signals = ['watering_interval', 'last_watered'];
-    let weatherReason = '';
-
-    if (weather && daysUntilBase <= 7) {
-      const hotAndDry = weather.maxTemperature >= 34 && weather.humidity <= 55;
-      const veryHumid = weather.humidity >= 82;
-      const meaningfulRain =
-        weather.precipitationSum >= 5 || weather.precipitationProbability >= 70;
-      if (hotAndDry) {
-        adjustmentDays = -Math.min(2, Math.max(1, Math.round(input.wateringDays * 0.2)));
-        weatherReason = `${Math.round(weather.maxTemperature)}°C heat and ${Math.round(weather.humidity)}% humidity can dry the pot faster.`;
-        signals.push('high_temperature', 'low_humidity');
-      } else if (outdoor && meaningfulRain) {
-        adjustmentDays = 2;
-        weatherReason = `${weather.precipitationSum.toFixed(1)} mm rain is forecast near this outdoor plant, so the soil may stay wet longer.`;
-        signals.push('outdoor_placement', 'rain_forecast');
-      } else if (veryHumid || (meaningfulRain && weather.humidity >= 72)) {
-        adjustmentDays = veryHumid ? 2 : 1;
-        weatherReason = `${Math.round(weather.humidity)}% humidity can slow soil drying${outdoor ? '' : ' even though this plant is sheltered indoors'}.`;
-        signals.push('high_humidity');
-      }
+    void locationMissing; // Missing weather does not disable plant-history intelligence.
+    const state = calculateWatering(input, now, weather);
+    if (input.reminder?.snoozedUntil && input.reminder.snoozedUntil > now && input.reminder.responseReason === 'SOIL_WET') {
+      state.wateringStatus = 'SKIP'; state.title = 'Do not water yet';
+      state.reasons.push('You reported wet soil. Check again at your selected time.');
     }
-
-    const scheduledAt = new Date(base);
-    scheduledAt.setDate(scheduledAt.getDate() + adjustmentDays);
-    if (input.reminder?.snoozedUntil) {
-      scheduledAt.setTime(input.reminder.snoozedUntil.getTime());
-      signals.push('user_requested_timing');
-      weatherReason =
-        input.reminder.responseReason === 'SOIL_WET'
-          ? 'You reported wet soil. Check again at the selected time; water only if dry.'
-          : 'Your requested check-in time is being used.';
-    }
-    const dueNow = scheduledAt <= now;
-    let status: SmartWateringStatus = 'ON_SCHEDULE';
-    let title = `Check soil on ${scheduledAt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`;
-    if (locationMissing) {
-      status = 'LOCATION_NEEDED';
-      title = `Scheduled soil check: ${base.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`;
-    } else if (dueNow) {
-      status = 'CHECK_NOW';
-      title = 'Check the soil today';
-    } else if (adjustmentDays < 0) {
-      status = 'CHECK_EARLIER';
-      title = `Check soil earlier: ${scheduledAt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`;
-    } else if (adjustmentDays > 0) {
-      status = 'DELAY_WATERING';
-      title = `Delay soil check to ${scheduledAt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`;
-    }
-
-    const fallbackReason = locationMissing
-      ? 'Add this plant’s city or coordinates to enable weather-aware timing. The normal watering interval is being used.'
-      : weather
-        ? 'Local weather does not currently justify changing the normal interval.'
-        : 'Weather is temporarily unavailable, so the normal watering interval is being used.';
-    const timingReason = dueNow
-      ? 'The adjusted care date is due. Check the topsoil and water only if it feels dry.'
-      : 'This is a soil-check date, not an instruction to water blindly.';
-
+    const baseState = calculateWatering(input, now);
+    const base = wateringCheckAt(baseState, now);
+    const scheduledAt = input.reminder?.snoozedUntil ?? wateringCheckAt(state, now);
+    const status: SmartWateringStatus = state.wateringStatus === 'SKIP' ? 'DELAY_WATERING'
+      : ['DUE', 'OVERDUE', 'INSPECT_FIRST', 'UNCERTAIN'].includes(state.wateringStatus) ? 'CHECK_NOW'
+      : state.weatherAdjustment < 0 ? 'CHECK_EARLIER' : 'ON_SCHEDULE';
     return {
-      id: input.reminder?.id ?? `smart-${input.id}`,
-      plantId: input.id,
-      plantName: input.name,
-      placement: input.location,
-      weatherLocation: input.weatherLocation,
-      type: 'WATER',
-      enabled: input.reminder?.enabled ?? true,
-      virtual: !input.reminder,
-      lastWateredAt: input.lastWateredAt,
-      baseScheduledAt: base,
-      scheduledAt,
-      adjustmentDays,
-      status,
-      title,
-      reason: `${weatherReason || fallbackReason} ${timingReason}`,
-      signals,
-      weather,
+      id: input.reminder?.id ?? `smart-${input.id}`, plantId: input.id,
+      plantName: input.name, placement: input.location, weatherLocation: input.weatherLocation,
+      type: 'WATER', enabled: input.reminder?.enabled ?? true, virtual: !input.reminder,
+      lastWateredAt: state.lastWateredAt, baseScheduledAt: base, scheduledAt,
+      adjustmentDays: state.weatherAdjustment, status, title: state.title,
+      reason: state.reasons.join(' '), signals: input.reminder?.snoozedUntil ? [...state.reasons, 'user_requested_timing'] : state.reasons, weather, wateringState: state,
     };
   }
 

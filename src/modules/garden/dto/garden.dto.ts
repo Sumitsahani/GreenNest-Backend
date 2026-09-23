@@ -1,6 +1,9 @@
 import { ApiProperty, PartialType, PickType } from '@nestjs/swagger';
 import {
   IsBoolean,
+  IsUUID,
+  IsIn,
+  IsNumber,
   IsDateString,
   IsEnum,
   IsInt,
@@ -75,6 +78,8 @@ export class UpdatePlantDto extends PartialType(
   ] as const),
 ) {}
 export class AddCareEventDto {
+  @ApiProperty({ required: false }) @IsOptional() @IsUUID('4') clientActionId?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsDateString() occurredAt?: string;
   @ApiProperty({ enum: CareAction }) @IsEnum(CareAction) type!: CareAction;
   @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(500) note?: string;
 }
@@ -91,10 +96,22 @@ export enum CareResponse {
   SOIL_WET = 'SOIL_WET',
 }
 export class RespondCareDto {
+  @ApiProperty({ required: false }) @IsOptional() @IsUUID('4') clientActionId?: string;
   @ApiProperty({ enum: CareResponse }) @IsEnum(CareResponse) action!: CareResponse;
   @ApiProperty({ required: false }) @IsOptional() @IsDateString() remindAt?: string;
 }
 export class CareTimingDto {
   @ApiProperty() @IsString() @MaxLength(80) timezone!: string;
   @ApiProperty({ minimum: 8, maximum: 20 }) @IsInt() @Min(8) @Max(20) hour!: number;
+}
+
+export class WateringContextDto {
+  @ApiProperty({ required: false }) @IsOptional() @IsNumber() @Min(1) @Max(60) dryingDays?: number;
+  @ApiProperty({ required: false }) @IsOptional() @IsIn(['WET', 'MOIST', 'DRY', 'UNKNOWN']) soilState?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsIn(['LOW', 'MEDIUM', 'HIGH']) light?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsIn(['TERRACOTTA', 'PLASTIC', 'OTHER']) potMaterial?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsIn(['FAST_DRAINING', 'RETAINING', 'OTHER']) soilMix?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsNumber() @Min(0) @Max(100) humidity?: number;
+  @ApiProperty({ required: false }) @IsOptional() @IsNumber() @Min(-20) @Max(60) temperature?: number;
+  @ApiProperty({ required: false }) @IsOptional() @IsBoolean() rainExposed?: boolean;
 }

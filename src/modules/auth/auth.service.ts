@@ -270,6 +270,7 @@ export class AuthService {
     const metadata = user.user_metadata ?? {};
     return {
       id: user.id,
+      ...(user.app_metadata?.role === 'ADMIN' ? { role: 'ADMIN' as const } : {}),
       phone: user.phone ?? null,
       email: user.email ?? null,
       name: typeof metadata.name === 'string' ? metadata.name : null,

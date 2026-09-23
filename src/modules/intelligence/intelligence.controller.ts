@@ -15,6 +15,7 @@ import { GardenIntelligenceService } from './garden-intelligence.service';
 import { CareSessionService } from './care-session.service';
 import {
   CompleteBatchCareDto,
+  CorrectCareSessionDto,
   EngagementEventDto,
   RecoveryOutcomeDto,
 } from './dto/garden-intelligence.dto';
@@ -60,8 +61,9 @@ export class IntelligenceController {
   undoCareSession(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
+    @Body() dto: CorrectCareSessionDto,
   ): ReturnType<CareSessionService['undo']> {
-    return this.careSessions.undo(user.id, id);
+    return this.careSessions.undo(user.id, id, dto.plantIds);
   }
 
   @Post('garden/recovery-checkpoints/:id/complete')

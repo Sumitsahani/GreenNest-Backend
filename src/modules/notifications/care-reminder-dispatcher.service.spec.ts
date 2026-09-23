@@ -11,6 +11,8 @@ describe('CareReminderDispatcherService', () => {
       claimed?: number;
       pushEnabled?: boolean;
       count?: number;
+      plants?: number;
+      alreadyNotified?: boolean;
       appLanguage?: 'ENGLISH' | 'HINDI';
     } = {},
   ) {
@@ -39,9 +41,9 @@ describe('CareReminderDispatcherService', () => {
     const create = jest.fn().mockResolvedValue({});
     const claim = jest.fn().mockResolvedValue({ count: options.claimed ?? 1 });
     const devices = jest.fn().mockResolvedValue([]);
-    const tx = { notification: { create }, careReminder: { updateMany: claim } };
+    const tx = { $executeRaw: jest.fn(), notification: { create, findFirst: jest.fn().mockResolvedValue(options.alreadyNotified ? { createdAt: new Date() } : null) }, careReminder: { updateMany: claim } };
     const prisma = {
-      careReminder: { findMany: jest.fn().mockResolvedValue([reminder]) },
+      careReminder: { findMany: jest.fn().mockResolvedValue(Array.from({ length: options.plants ?? 1 }, (_, i) => ({ ...reminder, id: `reminder-${i + 1}`, plant: { ...reminder.plant, id: `plant-${i + 1}` } }))) },
       userSettings: {
         findUnique: jest.fn().mockResolvedValue({
           careReminders: true,
@@ -57,12 +59,12 @@ describe('CareReminderDispatcherService', () => {
     const weather = {
       createReminder: jest
         .fn()
-        .mockResolvedValue({ scheduledAt: due, title: 'Check soil', reason: 'Water only if dry.' }),
+        .mockResolvedValue({ scheduledAt: due, title: 'Check soil', reason: 'Water only if dry.', wateringState: { wateringStatus: 'DUE' } }),
     } as unknown as WeatherCareService;
     const garden = {
       today: jest
         .fn()
-        .mockResolvedValue({ items: [{ plant: { id: 'plant-1' }, reason: 'Water only if dry.' }] }),
+        .mockResolvedValue({ items: Array.from({ length: options.plants ?? 1 }, (_, i) => ({ plant: { id: `plant-${i + 1}` }, reason: 'Water only if dry.' })) }),
     };
     return {
       service: new CareReminderDispatcherService(prisma, weather, garden as never),
@@ -114,4 +116,16 @@ describe('CareReminderDispatcherService', () => {
     await subject.service.dispatchDueReminders();
     expect(subject.claim).not.toHaveBeenCalled();
   });
+  it('aggregates 57 plants into exactly one notification', async () => {
+    const subject = setup({ plants: 57 });
+    await subject.service.dispatchDueReminders();
+    expect(subject.create).toHaveBeenCalledTimes(1);
+    expect(subject.claim).toHaveBeenCalledTimes(57);
+  });
+  it('does not send another garden notification in the user local day', async () => {
+    const subject = setup({ alreadyNotified: true });
+    await subject.service.dispatchDueReminders();
+    expect(subject.create).not.toHaveBeenCalled();
+  });
+
 });

@@ -21,6 +21,7 @@ describe('WeatherCareService', () => {
     id: 'plant-1',
     name: 'Rose',
     location: 'Balcony',
+    environment: 'OUTDOOR',
     weatherLocation: 'Delhi, India',
     latitude: 28.6139,
     longitude: 77.209,
@@ -108,17 +109,15 @@ describe('WeatherCareService', () => {
     const result = service.evaluate(plant(), weather(), false, now);
 
     expect(result.status).toBe('CHECK_NOW');
-    expect(result.adjustmentDays).toBe(-2);
-    expect(result.scheduledAt).toEqual(new Date('2026-09-05T06:00:00.000Z'));
-    expect(result.reason).toContain('dry the pot faster');
-    expect(result.signals).toEqual(
-      expect.arrayContaining(['last_watered', 'high_temperature', 'low_humidity']),
-    );
+    expect(result.adjustmentDays).toBe(-1);
+    expect(result.scheduledAt < result.baseScheduledAt).toBe(true);
+    expect(result.reason).toContain('speed drying');
+    expect(result.wateringState.weatherAdjustment).toBe(-1);
   });
 
   it('delays an outdoor reminder when meaningful rain is forecast', () => {
     const result = service.evaluate(
-      plant({ weatherLocation: 'Panaji, Goa, India' }),
+      plant({ weatherLocation: 'Panaji, Goa, India', events: [{ eventKey: 'watering_context', value: { rainExposed: true }, occurredAt: now }] }),
       weather({
         humidity: 76,
         maxTemperature: 29,
@@ -129,15 +128,14 @@ describe('WeatherCareService', () => {
       now,
     );
 
-    expect(result.status).toBe('DELAY_WATERING');
-    expect(result.adjustmentDays).toBe(2);
-    expect(result.scheduledAt).toEqual(new Date('2026-09-09T06:00:00.000Z'));
-    expect(result.reason).toContain('outdoor plant');
+    expect(result.adjustmentDays).toBe(1);
+    expect(result.wateringState.currentEstimatedIntervalDays).toBe(11);
+    expect(result.reason).toContain('exposed outdoor pot');
   });
 
   it('does not claim rain directly watered an indoor plant', () => {
     const result = service.evaluate(
-      plant({ location: 'Living Room' }),
+      plant({ location: 'Living Room', environment: 'INDOOR' }),
       weather({
         humidity: 78,
         maxTemperature: 28,
@@ -148,8 +146,8 @@ describe('WeatherCareService', () => {
       now,
     );
 
-    expect(result.adjustmentDays).toBe(1);
-    expect(result.reason).toContain('sheltered indoors');
+    expect(result.adjustmentDays).toBe(0);
+    expect(result.wateringState.currentEstimatedIntervalDays).toBe(10);
     expect(result.reason).not.toContain('rain may water');
   });
 
@@ -161,8 +159,8 @@ describe('WeatherCareService', () => {
       now,
     );
 
-    expect(result.status).toBe('LOCATION_NEEDED');
-    expect(result.baseScheduledAt).toEqual(new Date('2026-09-07T06:00:00.000Z'));
-    expect(result.reason).toContain('normal watering interval');
+    expect(result.wateringState.baselineIntervalDays).toBe(10);
+    expect(result.wateringState.nextWateringWindowStart).not.toBeNull();
+    expect(result.reason).toContain('baseline');
   });
 });

@@ -1,3 +1,4 @@
+import { calculateWatering, wateringCheckAt, wateringEvidence } from '../garden/watering-engine';
 import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   CareSessionItemStatus,
@@ -69,7 +70,7 @@ export class CareSessionService {
         userId,
         lifecycleStatus: { in: [PlantLifecycleStatus.ACTIVE, PlantLifecycleStatus.MOVED] },
       },
-      select: { id: true, wateringDays: true },
+      include: wateringEvidence,
     });
     if (plants.length !== dto.plantIds.length)
       throw new BusinessException(
@@ -77,11 +78,23 @@ export class CareSessionService {
         'One or more plants were not found in your active garden',
         HttpStatus.NOT_FOUND,
       );
-    const now = new Date();
+    const now = dto.occurredAt ? new Date(dto.occurredAt) : new Date();
+    if (!Number.isFinite(now.getTime()) || now.getTime() > Date.now() + 60_000)
+      throw new BusinessException(ErrorCode.VALIDATION_ERROR, 'Watering time cannot be in the future', HttpStatus.BAD_REQUEST);
     const session = await this.prisma.$transaction(
       async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${userId}, 0))`;
+        if (dto.clientActionId) {
+          const previous = await tx.careSession.findUnique({ where: { id: dto.clientActionId }, include: { items: true } });
+          if (previous) {
+            if (previous.userId !== userId || previous.items.length !== dto.plantIds.length || previous.items.some(i => !dto.plantIds.includes(i.plantId) || (i.status === 'SKIPPED') !== skipped.has(i.plantId)))
+              throw new BusinessException(ErrorCode.VALIDATION_ERROR, 'Session action ID was already used', HttpStatus.CONFLICT);
+            return previous;
+          }
+        }
         const created = await tx.careSession.create({
           data: {
+            id: dto.clientActionId,
             userId,
             actionType: CareType.WATER,
             source: EvidenceSource.USER_REPORTED,
@@ -89,7 +102,9 @@ export class CareSessionService {
             status: CareSessionStatus.ACTIVE,
           },
         });
-        for (const plant of plants) {
+        const currentPlants = await tx.gardenPlant.findMany({ where: { id: { in: dto.plantIds }, userId, lifecycleStatus: { in: ['ACTIVE', 'MOVED'] } }, include: wateringEvidence });
+        if (currentPlants.length !== dto.plantIds.length) throw new BusinessException(ErrorCode.NOT_FOUND, 'One or more plants left active care', HttpStatus.NOT_FOUND);
+        for (const plant of currentPlants) {
           if (skipped.has(plant.id)) {
             const reason = dto.skipReasons?.[plant.id] ?? 'SKIP';
             const event = await tx.plantEvent.create({
@@ -126,7 +141,8 @@ export class CareSessionService {
             });
             continue;
           }
-          const nextWateringAt = new Date(now.getTime() + plant.wateringDays * 86_400_000);
+          const latest = plant.lastWateredAt && plant.lastWateredAt > now ? plant.lastWateredAt : now;
+          const nextWateringAt = wateringCheckAt(calculateWatering({ ...plant, lastWateredAt: latest, careEvents: [{ type: 'WATER', caredAt: now }, ...(plant.careEvents ?? [])] }));
           const careEvent = await tx.careEvent.create({
             data: {
               plantId: plant.id,
@@ -159,7 +175,7 @@ export class CareSessionService {
           });
           await tx.gardenPlant.update({
             where: { id: plant.id },
-            data: { lastWateredAt: now, nextWateringAt },
+            data: { lastWateredAt: latest, nextWateringAt },
           });
           await tx.careReminder.updateMany({
             where: { plantId: plant.id, type: CareType.WATER, enabled: true },
@@ -215,7 +231,7 @@ export class CareSessionService {
     return session;
   }
 
-  async undo(userId: string, sessionId: string): Promise<CareSessionResult> {
+  async undo(userId: string, sessionId: string, plantIds?: string[]): Promise<CareSessionResult> {
     const session = await this.prisma.careSession.findFirst({
       where: { id: sessionId, userId },
       include: { items: { include: { plant: true } } },
@@ -229,7 +245,7 @@ export class CareSessionService {
     if (
       session.status !== CareSessionStatus.COMPLETED ||
       !session.completedAt ||
-      Date.now() - session.completedAt.getTime() > 15 * 60_000
+      (!plantIds && Date.now() - session.completedAt.getTime() > 15 * 60_000)
     ) {
       throw new BusinessException(
         ErrorCode.VALIDATION_ERROR,
@@ -237,10 +253,16 @@ export class CareSessionService {
         HttpStatus.BAD_REQUEST,
       );
     }
+    if (plantIds && (!plantIds.length || plantIds.some(id => !session.items.some(item => item.plantId === id && item.status === CareSessionItemStatus.COMPLETED))))
+      throw new BusinessException(ErrorCode.VALIDATION_ERROR, 'Choose completed plants from this session', HttpStatus.BAD_REQUEST);
     const now = new Date();
     const result = await this.prisma.$transaction(async (tx) => {
-      for (const item of session.items.filter(
-        (value) => value.status === CareSessionItemStatus.COMPLETED,
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${userId}, 0))`;
+
+      const current = await tx.careSession.findFirstOrThrow({ where: { id: sessionId, userId }, include: { items: { include: { plant: true } } } });
+      if (current.status !== CareSessionStatus.COMPLETED) throw new BusinessException(ErrorCode.VALIDATION_ERROR, 'Session was already corrected', HttpStatus.CONFLICT);
+      for (const item of current.items.filter(
+        (value) => value.status === CareSessionItemStatus.COMPLETED && (!plantIds || plantIds.includes(value.plantId)),
       )) {
         if (item.careEventId)
           await tx.careEvent.deleteMany({ where: { id: item.careEventId, plantId: item.plantId } });
@@ -252,8 +274,8 @@ export class CareSessionService {
           },
           orderBy: { caredAt: 'desc' },
         });
-        const base = previous?.caredAt ?? item.plant.createdAt;
-        const nextWateringAt = new Date(base.getTime() + item.plant.wateringDays * 86_400_000);
+        const remaining = await tx.gardenPlant.findUniqueOrThrow({ where: { id: item.plantId }, include: wateringEvidence });
+        const nextWateringAt = wateringCheckAt(calculateWatering({ ...remaining, lastWateredAt: previous?.caredAt ?? null }));
         if (item.plant.lastWateredAt?.getTime() === item.caredAt?.getTime()) {
           await tx.gardenPlant.update({
             where: { id: item.plantId },
@@ -279,7 +301,7 @@ export class CareSessionService {
         });
       }
       await tx.careSessionItem.updateMany({
-        where: { sessionId, status: CareSessionItemStatus.COMPLETED },
+        where: { sessionId, status: CareSessionItemStatus.COMPLETED, ...(plantIds ? { plantId: { in: plantIds } } : {}) },
         data: { status: CareSessionItemStatus.UNDONE },
       });
       await tx.engagementEvent.create({
@@ -287,7 +309,7 @@ export class CareSessionService {
       });
       return tx.careSession.update({
         where: { id: sessionId },
-        data: { status: CareSessionStatus.UNDONE, undoneAt: now },
+        data: { status: plantIds && current.items.some(item => item.status === CareSessionItemStatus.COMPLETED && !plantIds.includes(item.plantId)) ? CareSessionStatus.COMPLETED : CareSessionStatus.UNDONE, undoneAt: now },
         include: { items: { select: { id: true, plantId: true, status: true, caredAt: true } } },
       });
     });

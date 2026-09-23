@@ -80,11 +80,7 @@ export class SupportService {
     });
   }
 
-  async send(
-    userId: string,
-    id: string,
-    dto: SendSupportMessageDto,
-  ): Promise<SupportMessage> {
+  async send(userId: string, id: string, dto: SendSupportMessageDto): Promise<SupportMessage> {
     const conversation = await this.ownedConversation(userId, id);
     if (conversation.status === SupportConversationStatus.CLOSED) {
       throw new BusinessException(
@@ -141,7 +137,11 @@ export class SupportService {
     });
   }
 
-  async reply(id: string, dto: SendSupportMessageDto): Promise<SupportMessage> {
+  async reply(
+    id: string,
+    dto: SendSupportMessageDto,
+    admin?: { actorId: string; reason: string },
+  ): Promise<SupportMessage> {
     const conversation = await this.prisma.supportConversation.findUnique({ where: { id } });
     if (!conversation) {
       throw new BusinessException(
@@ -171,6 +171,17 @@ export class SupportService {
           type: 'SUPPORT_REPLY',
         },
       });
+      if (admin)
+        await tx.adminAuditLog.create({
+          data: {
+            actorId: admin.actorId,
+            action: 'support.reply',
+            entity: 'support',
+            entityId: id,
+            reason: admin.reason,
+            after: { messageId: message.id },
+          },
+        });
       return message;
     });
   }
