@@ -1,3 +1,5 @@
+import { ApiPaginatedResponse } from '../../common/paginated-response';
+import { BookingListQuery, ServiceListQuery } from '../../common/dto/list-query.dto';
 import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, type AuthenticatedUser } from '../../common/auth/authenticated-user';
@@ -10,8 +12,10 @@ import type { BookingResponse, ServiceResponse, SlotResponse } from './services.
 @Controller()
 export class ServicesController {
   constructor(private readonly services: ServicesService) {}
-  @Get('services') list(): Promise<ServiceResponse[]> {
-    return this.services.list();
+  @ApiPaginatedResponse()
+  @Get('services')
+  list(@Query() query: ServiceListQuery): ReturnType<ServicesService['listPage']> {
+    return this.services.listPage(query);
   }
   @Get('services/slots') slots(@Query('date') date: string): Promise<SlotResponse[]> {
     return this.services.slots(date);
@@ -25,10 +29,15 @@ export class ServicesController {
   ): Promise<BookingResponse> {
     return this.services.createBooking(user.id, dto);
   }
-  @Get('bookings') @ApiBearerAuth() @UseGuards(SupabaseAuthGuard) bookings(
+  @ApiPaginatedResponse()
+  @Get('bookings')
+  @ApiBearerAuth()
+  @UseGuards(SupabaseAuthGuard)
+  bookings(
     @CurrentUser() user: AuthenticatedUser,
-  ): Promise<BookingResponse[]> {
-    return this.services.bookings(user.id);
+    @Query() query: BookingListQuery,
+  ): ReturnType<ServicesService['bookingsPage']> {
+    return this.services.bookingsPage(user.id, query);
   }
   @Get('bookings/:id') @ApiBearerAuth() @UseGuards(SupabaseAuthGuard) booking(
     @CurrentUser() user: AuthenticatedUser,

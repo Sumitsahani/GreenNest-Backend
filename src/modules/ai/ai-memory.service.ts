@@ -1,3 +1,5 @@
+import { type PageResult, paginate, dateRange, listDirection } from '../../common/pagination';
+import { ListQueryDto } from '../../common/dto/list-query.dto';
 import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   AiMemoryType,
@@ -14,6 +16,32 @@ import type { ExtractedMemory } from './memory-extractor.service';
 
 @Injectable()
 export class AiMemoryService {
+  listPage(userId: string, query: ListQueryDto): Promise<PageResult<AiUserMemory>> {
+    const where: Prisma.AiUserMemoryWhereInput = {
+      userId,
+      status: MemoryStatus.ACTIVE,
+      createdAt: dateRange(query),
+      ...(query.search
+        ? {
+            OR: [
+              { memoryKey: { contains: query.search, mode: 'insensitive' as const } },
+              { memoryValue: { contains: query.search, mode: 'insensitive' as const } },
+            ],
+          }
+        : {}),
+    };
+    return paginate(
+      query,
+      (skip, take) =>
+        this.prisma.aiUserMemory.findMany({
+          where,
+          skip,
+          take,
+          orderBy: [{ updatedAt: listDirection(query) }, { id: 'asc' }],
+        }),
+      () => this.prisma.aiUserMemory.count({ where }),
+    );
+  }
   constructor(private readonly prisma: PrismaService) {}
 
   list(userId: string): Promise<AiUserMemory[]> {

@@ -1,3 +1,6 @@
+import { paginate, dateRange, listDirection, type PageResult } from '../../common/pagination';
+import { BookingListQuery, ServiceListQuery } from '../../common/dto/list-query.dto';
+import type { Prisma } from '@prisma/client';
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { BookingStatus } from '@prisma/client';
@@ -44,6 +47,67 @@ export interface BookingResponse {
 
 @Injectable()
 export class ServicesService {
+  listPage(query: ServiceListQuery): Promise<PageResult<ServiceResponse>> {
+    const where: Prisma.GardeningServiceWhereInput = {
+      active: true,
+      createdAt: dateRange(query),
+      ...(query.category ? { category: query.category } : {}),
+      ...(query.search ? { title: { contains: query.search, mode: 'insensitive' } } : {}),
+    };
+    return paginate(
+      query,
+      async (skip, take) =>
+        (
+          await this.prisma.gardeningService.findMany({
+            where,
+            skip,
+            take,
+            orderBy: [{ createdAt: listDirection(query) }, { id: 'asc' }],
+          })
+        ).map(this.mapService),
+      () => this.prisma.gardeningService.count({ where }),
+    );
+  }
+  bookingsPage(userId: string, query: BookingListQuery): Promise<PageResult<BookingResponse>> {
+    const terminal = closedJobs;
+    const where: Prisma.ServiceBookingWhereInput = {
+      userId,
+      scheduledAt: dateRange(query),
+      ...(query.status
+        ? {
+            status:
+              query.status === 'ACTIVE'
+                ? { notIn: terminal }
+                : query.status === 'HISTORY'
+                  ? { in: terminal }
+                  : query.status,
+          }
+        : {}),
+      ...(query.search
+        ? {
+            OR: [
+              { bookingNumber: { contains: query.search, mode: 'insensitive' } },
+              { service: { title: { contains: query.search, mode: 'insensitive' } } },
+            ],
+          }
+        : {}),
+    };
+    return paginate(
+      query,
+      async (skip, take) =>
+        (
+          await this.prisma.serviceBooking.findMany({
+            where,
+            skip,
+            take,
+            orderBy: [{ [query.sortBy]: listDirection(query) }, { id: 'asc' }],
+            include: { service: true, gardener: true },
+          })
+        ).map((row) => this.mapBooking(row)),
+      () => this.prisma.serviceBooking.count({ where }),
+    );
+  }
+
   constructor(private readonly prisma: PrismaService) {}
   async list(): Promise<ServiceResponse[]> {
     const rows = await this.prisma.gardeningService.findMany({
@@ -188,7 +252,12 @@ export class ServicesService {
           canWork(g, scheduledAt, service.durationMinutes, service.id, address.postalCode),
         );
         const plantIds = [...new Set(dto.plantIds ?? [])];
-        if (!plantIds.length) throw new BusinessException(ErrorCode.VALIDATION_ERROR, 'Select at least one plant for the visit.', HttpStatus.BAD_REQUEST);
+        if (!plantIds.length)
+          throw new BusinessException(
+            ErrorCode.VALIDATION_ERROR,
+            'Select at least one plant for the visit.',
+            HttpStatus.BAD_REQUEST,
+          );
         const plantCount = await tx.gardenPlant.count({ where: { id: { in: plantIds }, userId } });
         if (plantCount !== plantIds.length)
           throw new BusinessException(

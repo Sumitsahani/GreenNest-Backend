@@ -1,3 +1,5 @@
+import { ApiPaginatedResponse } from '../../common/paginated-response';
+import { BookingListQuery } from '../../common/dto/list-query.dto';
 import {
   Body,
   Controller,
@@ -32,10 +34,14 @@ function page(value?: string): number {
 @Controller()
 export class GardenerController {
   constructor(private readonly gardeners: GardenerService) {}
-  @Get('gardener/access') access(@CurrentUser() u: AuthenticatedUser): ReturnType<GardenerService['access']> {
+  @Get('gardener/access') access(
+    @CurrentUser() u: AuthenticatedUser,
+  ): ReturnType<GardenerService['access']> {
     return this.gardeners.access(u);
   }
-  @Get('gardener/profile') profile(@CurrentUser() u: AuthenticatedUser): ReturnType<GardenerService['profile']> {
+  @Get('gardener/profile') profile(
+    @CurrentUser() u: AuthenticatedUser,
+  ): ReturnType<GardenerService['profile']> {
     return this.gardeners.profile(u.id);
   }
   @Post('gardener/register') register(
@@ -50,14 +56,26 @@ export class GardenerController {
   ): ReturnType<GardenerService['saveProfile']> {
     return this.gardeners.saveProfile(u, dto);
   }
-  @Get('gardener/dashboard') dashboard(@CurrentUser() u: AuthenticatedUser): ReturnType<GardenerService['dashboard']> {
+  @Get('gardener/dashboard') dashboard(
+    @CurrentUser() u: AuthenticatedUser,
+  ): ReturnType<GardenerService['dashboard']> {
     return this.gardeners.dashboard(u.id);
   }
-  @Get('gardener/jobs') jobs(@CurrentUser() u: AuthenticatedUser, @Query('page') p?: string): ReturnType<GardenerService['jobs']> {
-    return this.gardeners.jobs(u.id, page(p));
+  @ApiPaginatedResponse()
+  @Get('gardener/jobs')
+  jobs(
+    @CurrentUser() u: AuthenticatedUser,
+    @Query() query: BookingListQuery,
+  ): ReturnType<GardenerService['jobsPage']> {
+    return this.gardeners.jobsPage(u.id, query, false);
   }
-  @Get('gardener/history') history(@CurrentUser() u: AuthenticatedUser, @Query('page') p?: string): ReturnType<GardenerService['jobs']> {
-    return this.gardeners.jobs(u.id, page(p), true);
+  @ApiPaginatedResponse()
+  @Get('gardener/history')
+  history(
+    @CurrentUser() u: AuthenticatedUser,
+    @Query() query: BookingListQuery,
+  ): ReturnType<GardenerService['jobsPage']> {
+    return this.gardeners.jobsPage(u.id, query, true);
   }
   @Get('gardener/earnings') earnings(
     @CurrentUser() u: AuthenticatedUser,
@@ -65,7 +83,9 @@ export class GardenerController {
   ): ReturnType<GardenerService['earnings']> {
     return this.gardeners.earnings(u.id, page(p));
   }
-  @Get('gardener/availability') availability(@CurrentUser() u: AuthenticatedUser): ReturnType<GardenerService['profile']> {
+  @Get('gardener/availability') availability(
+    @CurrentUser() u: AuthenticatedUser,
+  ): ReturnType<GardenerService['profile']> {
     return this.gardeners.profile(u.id);
   }
   @Patch('gardener/availability') setAvailability(

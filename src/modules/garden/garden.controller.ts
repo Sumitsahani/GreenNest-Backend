@@ -1,4 +1,16 @@
-import { Body, Query, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { ApiPaginatedResponse } from '../../common/paginated-response';
+import { GardenListQuery } from '../../common/dto/list-query.dto';
+import {
+  Body,
+  Query,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import type { CareReminder } from '@prisma/client';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, type AuthenticatedUser } from '../../common/auth/authenticated-user';
@@ -23,6 +35,10 @@ import type { SmartCareReminder } from './weather-care.service';
 @Controller('garden/plants')
 export class GardenController {
   constructor(private readonly garden: GardenService) {}
+  @Get('summary')
+  summary(@CurrentUser() user: AuthenticatedUser): ReturnType<GardenService['summary']> {
+    return this.garden.summary(user.id);
+  }
   @Get('care-timing')
   careTiming(@CurrentUser() user: AuthenticatedUser): Promise<CareTimingResponse> {
     return this.garden.careTiming(user.id);
@@ -42,8 +58,13 @@ export class GardenController {
   ): Promise<GardenPlantResponse> {
     return this.garden.respondCare(user.id, id, dto);
   }
-  @Get() list(@CurrentUser() user: AuthenticatedUser, @Query('page') page?: string): Promise<GardenPlantResponse[]> {
-    return this.garden.list(user.id, page === undefined ? undefined : Number(page));
+  @ApiPaginatedResponse()
+  @Get()
+  list(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: GardenListQuery,
+  ): ReturnType<GardenService['listPage']> {
+    return this.garden.listPage(user.id, query);
   }
   @Post() create(
     @CurrentUser() user: AuthenticatedUser,
@@ -67,11 +88,18 @@ export class GardenController {
     return this.garden.smartReminder(user.id, id);
   }
   @Post(':id/watering/correction')
-  wateringCorrection(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() dto: WateringContextDto): ReturnType<GardenService['wateringCorrection']> {
+  wateringCorrection(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: WateringContextDto,
+  ): ReturnType<GardenService['wateringCorrection']> {
     return this.garden.wateringCorrection(user.id, id, dto);
   }
   @Get(':id/watering-state')
-  async wateringState(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string): Promise<import('./watering-engine').WateringState> {
+  async wateringState(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<import('./watering-engine').WateringState> {
     return (await this.garden.smartReminder(user.id, id)).wateringState;
   }
   @Get(':id') detail(

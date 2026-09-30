@@ -1,3 +1,6 @@
+import { paginate, dateRange, listDirection, type PageResult } from '../../common/pagination';
+import { OrderListQuery } from '../../common/dto/list-query.dto';
+import type { Prisma } from '@prisma/client';
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { ErrorCode } from '../../common/constants/error-code';
@@ -45,6 +48,41 @@ type OrderRecord = Omit<
 
 @Injectable()
 export class OrdersService {
+  async listPage(userId: string, query: OrderListQuery): Promise<PageResult<OrderResponse>> {
+    const where: Prisma.OrderWhereInput = {
+      userId,
+      createdAt: dateRange(query),
+      ...(query.status
+        ? {
+            status:
+              query.status === 'ACTIVE' ? { notIn: ['DELIVERED', 'CANCELLED'] } : query.status,
+          }
+        : {}),
+      ...(query.search
+        ? {
+            OR: [
+              { orderNumber: { contains: query.search, mode: 'insensitive' } },
+              { items: { some: { productName: { contains: query.search, mode: 'insensitive' } } } },
+            ],
+          }
+        : {}),
+    };
+    return paginate(
+      query,
+      async (skip, take) =>
+        (
+          await this.prisma.order.findMany({
+            where,
+            skip,
+            take,
+            orderBy: [{ createdAt: listDirection(query) }, { id: 'asc' }],
+            include: { items: true },
+          })
+        ).map((row) => this.map(row)),
+      () => this.prisma.order.count({ where }),
+    );
+  }
+
   constructor(private readonly prisma: PrismaService) {}
   async create(userId: string, dto: CreateOrderDto): Promise<OrderResponse> {
     return this.prisma.$transaction(

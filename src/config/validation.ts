@@ -13,6 +13,7 @@ export const environmentValidationSchema = Joi.object({
   DATABASE_CONNECT_ON_STARTUP: Joi.boolean().truthy('true').falsy('false').default(true),
   HOST: Joi.string().default('0.0.0.0'),
   DATABASE_CONNECT_ATTEMPTS: Joi.number().integer().min(1).max(5).default(3),
+  DATABASE_CONNECTION_LIMIT: Joi.number().integer().min(1).max(50).default(4),
   SUPABASE_URL: Joi.string().uri().required(),
   SUPABASE_PUBLISHABLE_KEY: Joi.string().min(20).required(),
   WEB_APP_ORIGIN: Joi.string().uri().required(),

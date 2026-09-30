@@ -1,3 +1,5 @@
+import { ApiPaginatedResponse } from '../../common/paginated-response';
+import { DesignListQuery, SpaceListQuery } from '../../common/dto/list-query.dto';
 import {
   Body,
   Controller,
@@ -42,8 +44,12 @@ export class SpacesController {
 
   @Get()
   @ApiOperation({ summary: 'List the current user saved spaces' })
-  list(@CurrentUser() user: AuthenticatedUser): ReturnType<SpacesService['list']> {
-    return this.spaces.list(user.id);
+  @ApiPaginatedResponse()
+  list(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: SpaceListQuery,
+  ): ReturnType<SpacesService['listPage']> {
+    return this.spaces.listPage(user.id, query);
   }
 
   @Post(':id/recommendations')
@@ -75,12 +81,14 @@ export class SpacesController {
     return this.designs.create(user.id, id, dto);
   }
 
+  @ApiPaginatedResponse()
   @Get(':id/designs')
   listDesigns(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
-  ): ReturnType<SpaceDesignsService['list']> {
-    return this.designs.list(user.id, id);
+    @Query() query: DesignListQuery,
+  ): ReturnType<SpaceDesignsService['listPage']> {
+    return this.designs.listPage(user.id, id, query);
   }
 
   @Get(':id/designs/:designId')

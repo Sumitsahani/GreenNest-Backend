@@ -628,14 +628,10 @@ export class PlantIntelligenceService {
     knownRelationships?: HistoricalRelationship[],
   ): Promise<PlantRecommendation> {
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const existing = await this.prisma.plantRecommendation.findFirst({
-      where: {
-        userId,
-        plantId,
-        createdAt: { gte: since },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    // getPlantState already loaded the newest recommendations for this user
+    // and plant. Avoid another database round trip for the same row.
+    const newest = state.recommendations[0];
+    const existing = newest && newest.createdAt >= since ? newest : null;
     if (existing && !state.wateringState) {
       if (existing.status !== RecommendationStatus.GENERATED) return existing;
       return this.prisma.plantRecommendation.update({

@@ -1,5 +1,5 @@
 export interface SupabaseUser {
-  app_metadata?: { role?: string };
+  app_metadata?: { role?: string; suspended?: boolean };
   id: string;
   phone?: string;
   email?: string;

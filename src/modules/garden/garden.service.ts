@@ -1,4 +1,11 @@
-import { calculateWatering, wateringCheckAt, wateringEvidence, type WateringState } from './watering-engine';
+import { paginate, dateRange, listDirection, type PageResult } from '../../common/pagination';
+import { GardenListQuery } from '../../common/dto/list-query.dto';
+import {
+  calculateWatering,
+  wateringCheckAt,
+  wateringEvidence,
+  type WateringState,
+} from './watering-engine';
 import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   CareType,
@@ -27,7 +34,9 @@ import { PlantIntelligenceService } from '../intelligence/plant-intelligence.ser
 import { WeatherCareService, type SmartCareReminder } from './weather-care.service';
 import { GardenIntelligenceService } from '../intelligence/garden-intelligence.service';
 
-export type GardenPlantResponse = Prisma.GardenPlantGetPayload<{ include: { careEvents: true } }> & { wateringState?: WateringState };
+export type GardenPlantResponse = Prisma.GardenPlantGetPayload<{
+  include: { careEvents: true };
+}> & { wateringState?: WateringState };
 export interface CareTimingResponse {
   timezone: string;
   hour: number;
@@ -36,6 +45,76 @@ export interface CareTimingResponse {
 
 @Injectable()
 export class GardenService {
+  async summary(userId: string): Promise<{ total: number; healthy: number; locations: string[] }> {
+    const where: Prisma.GardenPlantWhereInput = {
+      userId,
+      lifecycleStatus: { in: ['ACTIVE', 'MOVED'] },
+    };
+    const [locations, healthy] = await Promise.all([
+      this.prisma.gardenPlant.groupBy({
+        by: ['location'],
+        where,
+        _count: { _all: true },
+        orderBy: { location: 'asc' },
+      }),
+      this.prisma.gardenPlant.count({ where: { ...where, health: { gte: 80 } } }),
+    ]);
+    return {
+      total: locations.reduce((total, row) => total + row._count._all, 0),
+      healthy,
+      locations: locations.map((row) => row.location),
+    };
+  }
+
+  listPage(userId: string, query: GardenListQuery): Promise<PageResult<GardenPlantResponse>> {
+    const where: Prisma.GardenPlantWhereInput = {
+      userId,
+      createdAt: dateRange(query),
+      lifecycleStatus: query.status ?? { in: ['ACTIVE', 'MOVED'] },
+      ...(query.location ? { location: query.location } : {}),
+      ...(query.environment ? { environment: query.environment } : {}),
+      ...(query.search
+        ? {
+            OR: [
+              { name: { contains: query.search, mode: 'insensitive' } },
+              { species: { contains: query.search, mode: 'insensitive' } },
+              { location: { contains: query.search, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+    };
+    return paginate(
+      query,
+      async (skip, take) =>
+        Promise.all(
+          (
+            await this.prisma.gardenPlant.findMany({
+              where,
+              skip,
+              take,
+              include: wateringEvidence,
+              orderBy: [{ createdAt: listDirection(query) }, { id: 'asc' }],
+            })
+          ).map(async (plant) => {
+            if (
+              plant.environment === 'OUTDOOR' &&
+              plant.latitude != null &&
+              plant.longitude != null
+            ) {
+              const smart = await this.weatherCare.createReminder(plant);
+              return {
+                ...plant,
+                wateringState: smart.wateringState,
+                nextWateringAt: smart.scheduledAt,
+              };
+            }
+            return this.withWatering(plant);
+          }),
+        ),
+      () => this.prisma.gardenPlant.count({ where }),
+    );
+  }
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly carePlans: GardenCarePlanService,
@@ -44,7 +123,12 @@ export class GardenService {
     private readonly gardenIntelligence: GardenIntelligenceService,
   ) {}
   async list(userId: string, page?: number): Promise<GardenPlantResponse[]> {
-    if (page !== undefined && (!Number.isInteger(page) || page < 1)) throw new BusinessException(ErrorCode.VALIDATION_ERROR, 'Invalid page', HttpStatus.BAD_REQUEST);
+    if (page !== undefined && (!Number.isInteger(page) || page < 1))
+      throw new BusinessException(
+        ErrorCode.VALIDATION_ERROR,
+        'Invalid page',
+        HttpStatus.BAD_REQUEST,
+      );
     const plants = await this.prisma.gardenPlant.findMany({
       where: {
         userId,
@@ -55,13 +139,19 @@ export class GardenService {
       skip: page === undefined ? 0 : (page - 1) * 100,
       include: wateringEvidence,
     });
-    return Promise.all(plants.map(async plant => {
-      if (plant.environment === 'OUTDOOR' && plant.latitude != null && plant.longitude != null) {
-        const smart = await this.weatherCare.createReminder(plant);
-        return { ...plant, wateringState: smart.wateringState, nextWateringAt: smart.scheduledAt };
-      }
-      return this.withWatering(plant);
-    }));
+    return Promise.all(
+      plants.map(async (plant) => {
+        if (plant.environment === 'OUTDOOR' && plant.latitude != null && plant.longitude != null) {
+          const smart = await this.weatherCare.createReminder(plant);
+          return {
+            ...plant,
+            wateringState: smart.wateringState,
+            nextWateringAt: smart.scheduledAt,
+          };
+        }
+        return this.withWatering(plant);
+      }),
+    );
   }
   async create(userId: string, dto: CreatePlantDto): Promise<GardenPlantResponse> {
     const [plan, weatherLocation] = await Promise.all([
@@ -170,7 +260,12 @@ export class GardenService {
     return this.withWatering(result);
   }
   async care(userId: string, id: string, dto: AddCareEventDto): Promise<GardenPlantResponse> {
-    return this.recordCareAt(userId, id, dto, dto.occurredAt ? new Date(dto.occurredAt) : new Date());
+    return this.recordCareAt(
+      userId,
+      id,
+      dto,
+      dto.occurredAt ? new Date(dto.occurredAt) : new Date(),
+    );
   }
 
   async careTiming(userId: string): Promise<CareTimingResponse> {
@@ -344,7 +439,7 @@ export class GardenService {
       note ?? `Next watering rescheduled to ${scheduledAt.toISOString()}`,
     );
     this.gardenIntelligence.invalidate(userId);
-    return { ...await this.ownedPlant(userId, id), nextWateringAt: scheduledAt };
+    return { ...(await this.ownedPlant(userId, id)), nextWateringAt: scheduledAt };
   }
 
   private async recordCareAt(
@@ -356,7 +451,11 @@ export class GardenService {
     // Care actions must stay fast and reliable even when Gemini is unavailable.
     // Care-plan generation belongs to plant creation/backfill, never this write path.
     if (!Number.isFinite(caredAt.getTime()) || caredAt.getTime() > Date.now() + 60_000)
-      throw new BusinessException(ErrorCode.VALIDATION_ERROR, 'Watering time cannot be in the future', HttpStatus.BAD_REQUEST);
+      throw new BusinessException(
+        ErrorCode.VALIDATION_ERROR,
+        'Watering time cannot be in the future',
+        HttpStatus.BAD_REQUEST,
+      );
     await this.ownedPlant(userId, id);
     await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${userId}, 0))`;
@@ -364,13 +463,27 @@ export class GardenService {
         const existing = await tx.careEvent.findUnique({ where: { id: dto.clientActionId } });
         if (existing) {
           if (existing.plantId !== id || String(existing.type) !== String(dto.type))
-            throw new BusinessException(ErrorCode.VALIDATION_ERROR, 'Care action ID was already used', HttpStatus.CONFLICT);
+            throw new BusinessException(
+              ErrorCode.VALIDATION_ERROR,
+              'Care action ID was already used',
+              HttpStatus.CONFLICT,
+            );
           return;
         }
       }
-      const plant = await tx.gardenPlant.findFirstOrThrow({ where: { id, userId }, include: wateringEvidence });
-      const latest = plant.lastWateredAt && plant.lastWateredAt > caredAt ? plant.lastWateredAt : caredAt;
-      const nextWateringAt = wateringCheckAt(calculateWatering({ ...plant, lastWateredAt: latest, careEvents: [{ type: dto.type, caredAt }, ...plant.careEvents] }));
+      const plant = await tx.gardenPlant.findFirstOrThrow({
+        where: { id, userId },
+        include: wateringEvidence,
+      });
+      const latest =
+        plant.lastWateredAt && plant.lastWateredAt > caredAt ? plant.lastWateredAt : caredAt;
+      const nextWateringAt = wateringCheckAt(
+        calculateWatering({
+          ...plant,
+          lastWateredAt: latest,
+          careEvents: [{ type: dto.type, caredAt }, ...plant.careEvents],
+        }),
+      );
       await tx.careEvent.create({
         data: { id: dto.clientActionId, plantId: id, type: dto.type, note: dto.note, caredAt },
       });
@@ -414,12 +527,23 @@ export class GardenService {
     this.gardenIntelligence.invalidate(userId);
     return this.ownedPlant(userId, id);
   }
-  async wateringCorrection(userId: string, id: string, dto: WateringContextDto): Promise<GardenPlantResponse> {
+  async wateringCorrection(
+    userId: string,
+    id: string,
+    dto: WateringContextDto,
+  ): Promise<GardenPlantResponse> {
     await this.ownedPlant(userId, id);
-    await this.prisma.plantEvent.create({ data: {
-      userId, plantId: id, type: PlantEventType.USER_NOTE, eventKey: 'watering_context',
-      source: EvidenceSource.USER_CORRECTION, confidence: 1, value: { ...dto },
-    } });
+    await this.prisma.plantEvent.create({
+      data: {
+        userId,
+        plantId: id,
+        type: PlantEventType.USER_NOTE,
+        eventKey: 'watering_context',
+        source: EvidenceSource.USER_CORRECTION,
+        confidence: 1,
+        value: { ...dto },
+      },
+    });
     this.gardenIntelligence.invalidate(userId);
     return this.ownedPlant(userId, id);
   }
@@ -551,8 +675,15 @@ export class GardenService {
     return this.withWatering(plant);
   }
 
-  private withWatering<T extends import('./watering-engine').WateringInput>(plant: T): T & { wateringState: WateringState; nextWateringAt: Date } {
+  private withWatering<T extends import('./watering-engine').WateringInput>(
+    plant: T,
+  ): T & { wateringState: WateringState; nextWateringAt: Date } {
     const wateringState = calculateWatering(plant);
-    return { ...plant, lastWateredAt: wateringState.lastWateredAt, wateringState, nextWateringAt: wateringCheckAt(wateringState) };
+    return {
+      ...plant,
+      lastWateredAt: wateringState.lastWateredAt,
+      wateringState,
+      nextWateringAt: wateringCheckAt(wateringState),
+    };
   }
 }

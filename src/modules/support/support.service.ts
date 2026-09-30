@@ -1,3 +1,6 @@
+import { paginate, dateRange, listDirection, type PageResult } from '../../common/pagination';
+import { ListQueryDto, SupportListQuery } from '../../common/dto/list-query.dto';
+import type { Prisma } from '@prisma/client';
 import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   SupportConversationStatus,
@@ -20,6 +23,83 @@ export type SupportConversationResponse = SupportConversation & {
 
 @Injectable()
 export class SupportService {
+  listPage(userId: string, query: SupportListQuery): Promise<PageResult<SupportConversation>> {
+    const where: Prisma.SupportConversationWhereInput = {
+      userId,
+      createdAt: dateRange(query),
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.search ? { subject: { contains: query.search, mode: 'insensitive' } } : {}),
+    };
+    return paginate(
+      query,
+      (skip, take) =>
+        this.prisma.supportConversation.findMany({
+          where,
+          skip,
+          take,
+          orderBy: [{ lastMessageAt: listDirection(query) }, { id: 'asc' }],
+        }),
+      () => this.prisma.supportConversation.count({ where }),
+    );
+  }
+  async messagesPage(
+    userId: string,
+    id: string,
+    query: ListQueryDto,
+  ): Promise<PageResult<SupportMessage>> {
+    await this.ownedConversation(userId, id);
+    const where: Prisma.SupportMessageWhereInput = {
+      conversationId: id,
+      createdAt: dateRange(query),
+      ...(query.search ? { message: { contains: query.search, mode: 'insensitive' } } : {}),
+    };
+    const page = await paginate(
+      query,
+      (skip, take) =>
+        this.prisma.supportMessage.findMany({
+          where,
+          skip,
+          take,
+          orderBy: [{ createdAt: listDirection(query) }, { id: 'asc' }],
+        }),
+      () => this.prisma.supportMessage.count({ where }),
+    );
+    const readAt = new Date();
+    if (page.items.length)
+      await this.prisma.supportMessage.updateMany({
+        where: {
+          conversationId: id,
+          id: { in: page.items.map((row) => row.id) },
+          sender: { in: ['SUPPORT', 'SYSTEM'] },
+          readAt: null,
+        },
+        data: { readAt },
+      });
+    page.items = page.items.map((row) =>
+      !row.readAt && row.sender !== 'USER' ? { ...row, readAt } : row,
+    );
+    return page;
+  }
+
+  adminListPage(query: SupportListQuery): Promise<PageResult<SupportConversationResponse>> {
+    const where: Prisma.SupportConversationWhereInput = {
+      status: query.status,
+      createdAt: dateRange(query),
+      ...(query.search ? { subject: { contains: query.search, mode: 'insensitive' } } : {}),
+    };
+    return paginate(
+      query,
+      (skip, take) =>
+        this.prisma.supportConversation.findMany({
+          where,
+          skip,
+          take,
+          include: { messages: { orderBy: [{ createdAt: 'desc' }, { id: 'asc' }], take: 1 } },
+          orderBy: [{ lastMessageAt: listDirection(query) }, { id: 'asc' }],
+        }),
+      () => this.prisma.supportConversation.count({ where }),
+    );
+  }
   constructor(private readonly prisma: PrismaService) {}
 
   list(userId: string): Promise<SupportConversation[]> {

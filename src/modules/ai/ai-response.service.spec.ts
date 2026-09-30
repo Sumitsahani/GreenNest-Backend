@@ -12,7 +12,7 @@ describe('detectResponseLanguage', () => {
 });
 
 describe('AiResponseService friendly conversation', () => {
-  it('responds to a greeting as Plant Buddy without forcing garden diagnostics', async () => {
+  it('responds to a greeting as Vriksha Plant Doctor without forcing garden diagnostics', async () => {
     const response = await new AiResponseService().generate('Hello, how are you?', {
       garden: [],
       memories: [],
@@ -22,7 +22,7 @@ describe('AiResponseService friendly conversation', () => {
       promptContext: 'No garden context is needed for this greeting.',
     });
 
-    expect(response).toContain('Plant Buddy');
+    expect(response).toContain('Vriksha Plant Doctor');
     expect(response).not.toContain('saved garden plant');
   });
 

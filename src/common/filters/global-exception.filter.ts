@@ -63,6 +63,20 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         details: exception.context.details ?? null,
       };
     }
+    if (
+      (exception instanceof Prisma.PrismaClientKnownRequestError &&
+        ['P2024', 'P2037', 'P1001', 'P1002'].includes(exception.code)) ||
+      (exception instanceof Prisma.PrismaClientUnknownRequestError &&
+        /EMAXCONNSESSION|too many clients|remaining connection slots/i.test(exception.message))
+    ) {
+      return {
+        status: HttpStatus.SERVICE_UNAVAILABLE,
+        code: ErrorCode.SERVICE_UNAVAILABLE,
+        message: 'Database is busy. Please retry shortly.',
+        field: null,
+        details: null,
+      };
+    }
     if (exception instanceof Prisma.PrismaClientKnownRequestError) {
       if (exception.code === 'P2034')
         return {

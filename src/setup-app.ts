@@ -4,7 +4,6 @@ import helmet from 'helmet';
 import { ErrorCode } from './common/constants/error-code';
 import { BusinessException } from './common/exceptions/business.exception';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
-import { RequestLoggingInterceptor } from './common/interceptors/request-logging.interceptor';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { toValidationDetails } from './common/validation/validation-details';
 
@@ -39,6 +38,6 @@ export function setupApp(app: INestApplication): void {
     }),
   );
   app.useGlobalFilters(new GlobalExceptionFilter());
-  app.useGlobalInterceptors(new RequestLoggingInterceptor(), new ResponseInterceptor());
+  app.useGlobalInterceptors(new ResponseInterceptor());
   app.enableShutdownHooks();
 }

@@ -14,6 +14,16 @@ import type { AuthenticatedUser } from '../../common/auth/authenticated-user';
 import { PlantStateService } from '../intelligence/plant-state.service';
 import { GardenerService } from '../gardener/gardener.service';
 import { SupportService } from '../support/support.service';
+import {
+  addStaff,
+  adjustRewards,
+  changeCustomer,
+  customerProfile,
+  manageBooking,
+  memoryData,
+  onlyFields,
+  requiredText,
+} from './admin-management';
 
 type Row = Record<string, unknown>;
 type Delegate = {
@@ -61,7 +71,12 @@ export class AdminService {
       permissions: permissionsFor(staff.role),
       resources: Object.entries(resources)
         .filter(([, r]) => permits(staff.role, r.permission))
-        .map(([key, r]) => ({ key, title: r.title, columns: r.columns })),
+        .map(([key, r]) => ({
+          key,
+          title: r.title,
+          columns: r.columns,
+          statuses: this.statuses(key),
+        })),
       customers: permits(staff.role, 'customers.read'),
       finance: permits(staff.role, 'finance.read'),
       system: permits(staff.role, 'system.read'),
@@ -70,9 +85,59 @@ export class AdminService {
   private range(q: AdminQuery): Prisma.DateTimeFilter {
     const from = q.from ? new Date(q.from) : undefined;
     const to = q.to ? new Date(q.to) : undefined;
+    if ((from && !Number.isFinite(from.getTime())) || (to && !Number.isFinite(to.getTime())))
+      throw new BadRequestException('Use valid dates.');
     if (from && to && from >= to)
       throw new BadRequestException('End date must be after start date.');
     return { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) };
+  }
+  async lookup(user: AuthenticatedUser, key: string, q: AdminQuery): Promise<unknown> {
+    const staff = await this.access.require(user);
+    if (key === 'customers') {
+      if (
+        !['customers.read', 'rewards.update', 'notifications.update'].some((p) =>
+          permits(staff.role, p),
+        )
+      )
+        await this.access.require(user, 'customers.read');
+      const search = `%${q.search ?? ''}%`;
+      const rows = await this.db.$queryRaw<
+        Row[]
+      >`SELECT id, email, raw_user_meta_data->>'name' AS name
+        FROM auth.users WHERE COALESCE(raw_app_meta_data->>'role','') <> 'ADMIN'
+          AND COALESCE(raw_app_meta_data->>'suspended','false') <> 'true'
+          AND (email ILIKE ${search} OR raw_user_meta_data->>'name' ILIKE ${search} OR id::text ILIKE ${search})
+        ORDER BY created_at DESC, id DESC LIMIT ${q.limit + 1} OFFSET ${(q.page - 1) * q.limit}`;
+      return { rows: rows.slice(0, q.limit), hasMore: rows.length > q.limit };
+    }
+    if (key === 'categories') await this.access.require(user, 'products.read');
+    else if (key === 'gardeners') await this.access.require(user, 'bookings.update');
+    else throw new NotFoundException('Unknown lookup.');
+    const rows =
+      key === 'categories'
+        ? await this.db.category.findMany({
+            where: {
+              active: true,
+              ...(q.search ? { name: { contains: q.search, mode: 'insensitive' } } : {}),
+            },
+            select: { id: true, name: true },
+            orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+            skip: (q.page - 1) * q.limit,
+            take: q.limit + 1,
+          })
+        : await this.db.gardener.findMany({
+            where: {
+              active: true,
+              verified: true,
+              profileComplete: true,
+              ...(q.search ? { name: { contains: q.search, mode: 'insensitive' } } : {}),
+            },
+            select: { id: true, name: true, city: true },
+            orderBy: [{ name: 'asc' }, { id: 'asc' }],
+            skip: (q.page - 1) * q.limit,
+            take: q.limit + 1,
+          });
+    return { rows: rows.slice(0, q.limit), hasMore: rows.length > q.limit };
   }
   async dashboard(user: AuthenticatedUser, q: AdminQuery): Promise<unknown> {
     const staff = await this.access.require(user, 'dashboard.read');
@@ -195,9 +260,24 @@ export class AdminService {
     };
   }
   private resource(key: string): (typeof resources)[Resource] {
-    const r = resources[key as Resource];
+    const r = Object.hasOwn(resources, key) ? resources[key as Resource] : undefined;
     if (!r) throw new NotFoundException('Unknown admin section.');
     return r;
+  }
+  private statuses(key: string): string[] {
+    if (key === 'inventory') return ['LOW', 'OUT'];
+    if (key === 'payouts') return ['PENDING', 'PAID'];
+    if (key === 'notifications') return ['DRAFT', 'SENT', 'CANCELLED'];
+    const resource = this.resource(key);
+    if (!('status' in resource)) return [];
+    const model = Prisma.dmmf.datamodel.models.find(
+      (m) => m.name.toLowerCase() === resource.model.toLowerCase(),
+    );
+    const field = model?.fields.find((f) => f.name === resource.status);
+    return (
+      Prisma.dmmf.datamodel.enums.find((e) => e.name === field?.type)?.values.map((v) => v.name) ??
+      []
+    );
   }
   private delegate(model: string): Delegate {
     return (this.db as unknown as Record<string, Delegate>)[model]!;
@@ -223,6 +303,8 @@ export class AdminService {
       where.OR = r.search.map((field) => ({
         [field]: { contains: q.search, mode: 'insensitive' },
       }));
+    if (q.status && !this.statuses(key).includes(q.status))
+      throw new BadRequestException('Choose a valid status for this section.');
     if (q.status && 'status' in r) where[r.status] = q.status;
     if (key === 'inventory' && q.status === 'LOW') where.stock = { gt: 0, lte: 5 };
     if (key === 'inventory' && q.status === 'OUT') where.stock = 0;
@@ -234,7 +316,7 @@ export class AdminService {
       delegate.findMany({
         where,
         select,
-        orderBy: { [dateField]: 'desc' },
+        orderBy: [{ [dateField]: 'desc' }, { [key === 'admin-users' ? 'userId' : 'id']: 'desc' }],
         skip: (q.page - 1) * q.limit,
         take: q.limit,
       }),
@@ -294,24 +376,34 @@ export class AdminService {
   }> {
     await this.access.require(user, 'customers.read');
     this.range(q);
+    if (q.status && !['ACTIVE', 'SUSPENDED'].includes(q.status))
+      throw new BadRequestException('Choose ACTIVE or SUSPENDED.');
     const search = `%${q.search ?? ''}%`;
     const rows = await this.db.$queryRaw<
       Row[]
-    >`SELECT id, email, phone, raw_user_meta_data->>'name' AS name, created_at AS "createdAt", last_sign_in_at AS "lastActive" FROM auth.users WHERE COALESCE(raw_app_meta_data->>'role','') <> 'ADMIN' AND created_at >= COALESCE(${q.from ?? null}::timestamptz, '-infinity') AND created_at < COALESCE(${q.to ?? null}::timestamptz, 'infinity') AND (email ILIKE ${search} OR phone ILIKE ${search} OR raw_user_meta_data->>'name' ILIKE ${search} OR id::text ILIKE ${search}) ORDER BY created_at DESC LIMIT ${q.limit} OFFSET ${(q.page - 1) * q.limit}`;
+    >`SELECT id, email, phone, raw_user_meta_data->>'name' AS name,
+      CASE WHEN COALESCE(raw_app_meta_data->>'suspended','false') = 'true' THEN 'SUSPENDED' ELSE 'ACTIVE' END AS status,
+      created_at AS "createdAt", last_sign_in_at AS "lastActive" FROM auth.users
+      WHERE COALESCE(raw_app_meta_data->>'role','') <> 'ADMIN'
+      AND (${q.status ?? ''} = '' OR (COALESCE(raw_app_meta_data->>'suspended','false') = 'true') = ${q.status === 'SUSPENDED'})
+      AND created_at >= COALESCE(${q.from ?? null}::timestamptz, '-infinity') AND created_at < COALESCE(${q.to ?? null}::timestamptz, 'infinity') AND (email ILIKE ${search} OR phone ILIKE ${search} OR raw_user_meta_data->>'name' ILIKE ${search} OR id::text ILIKE ${search}) ORDER BY created_at DESC, id DESC LIMIT ${q.limit} OFFSET ${(q.page - 1) * q.limit}`;
     const count = await this.db.$queryRaw<
       { count: number }[]
-    >`SELECT count(*)::int AS count FROM auth.users WHERE COALESCE(raw_app_meta_data->>'role','') <> 'ADMIN' AND created_at >= COALESCE(${q.from ?? null}::timestamptz, '-infinity') AND created_at < COALESCE(${q.to ?? null}::timestamptz, 'infinity') AND (email ILIKE ${search} OR phone ILIKE ${search} OR raw_user_meta_data->>'name' ILIKE ${search} OR id::text ILIKE ${search})`;
+    >`SELECT count(*)::int AS count FROM auth.users WHERE COALESCE(raw_app_meta_data->>'role','') <> 'ADMIN'
+      AND (${q.status ?? ''} = '' OR (COALESCE(raw_app_meta_data->>'suspended','false') = 'true') = ${q.status === 'SUSPENDED'})
+      AND created_at >= COALESCE(${q.from ?? null}::timestamptz, '-infinity') AND created_at < COALESCE(${q.to ?? null}::timestamptz, 'infinity') AND (email ILIKE ${search} OR phone ILIKE ${search} OR raw_user_meta_data->>'name' ILIKE ${search} OR id::text ILIKE ${search})`;
     return {
       rows,
       total: count[0]?.count ?? 0,
       page: q.page,
       limit: q.limit,
-      columns: ['name', 'email', 'phone', 'createdAt', 'lastActive'],
+      columns: ['name', 'email', 'phone', 'status', 'createdAt', 'lastActive'],
       title: 'Customers',
     };
   }
   async customer(user: AuthenticatedUser, id: string): Promise<unknown> {
     await this.access.require(user, 'customers.read');
+    const profile = await customerProfile(this.db, id);
     const [orders, plants, bookings, points, ai, tickets] = await Promise.all([
       this.db.order.aggregate({
         where: { userId: id },
@@ -330,6 +422,7 @@ export class AdminService {
       this.db.supportConversation.count({ where: { userId: id } }),
     ]);
     return {
+      ...profile,
       orders,
       plants,
       bookings,
@@ -346,11 +439,12 @@ export class AdminService {
     change: AdminChange,
     before: unknown,
     after: unknown,
+    action = 'update',
   ): Promise<unknown> {
     return tx.adminAuditLog.create({
       data: {
         actorId: user.id,
-        action: `${key}.update`,
+        action: `${key}.${action}`,
         entity: key,
         entityId: id,
         reason: change.reason,
@@ -368,20 +462,23 @@ export class AdminService {
     const v = change.values;
     const reason = text(change.reason, 'Reason', 500);
     change.reason = reason;
+    if (!Object.keys(v).length) throw new BadRequestException('No changes supplied.');
     const permission =
       key === 'inventory'
         ? 'inventory.update'
-        : key === 'admin-users'
-          ? 'admin.manage'
-          : key === 'orders' && v.status === 'CANCELLED'
-            ? 'orders.cancel'
-            : key === 'payouts'
-              ? 'finance.update'
-              : key === 'gardeners' && v.verified !== undefined
-                ? 'gardeners.approve'
-                : key === 'gardeners' && v.active !== undefined
-                  ? 'gardeners.suspend'
-                  : `${key}.update`;
+        : key === 'categories'
+          ? 'products.update'
+          : key === 'admin-users'
+            ? 'admin.manage'
+            : key === 'orders' && v.status === 'CANCELLED'
+              ? 'orders.cancel'
+              : key === 'payouts'
+                ? 'finance.update'
+                : key === 'gardeners' && v.verified !== undefined
+                  ? 'gardeners.approve'
+                  : key === 'gardeners' && v.active !== undefined
+                    ? 'gardeners.suspend'
+                    : `${key}.update`;
     await this.access.require(user, permission);
     if (key === 'payouts')
       return this.gardeners.payout(user, id, text(v.reference, 'Payment reference', 200), reason);
@@ -397,7 +494,18 @@ export class AdminService {
       async (tx) => {
         let before: unknown;
         let after: unknown;
-        if (key === 'orders') {
+        if (key === 'customers') {
+          ({ before, after } = await changeCustomer(tx, id, v));
+        } else if (key === 'ai-memory') {
+          before = await tx.aiUserMemory.findUniqueOrThrow({ where: { id } });
+          after = await tx.aiUserMemory.update({ where: { id }, data: memoryData(v) });
+        } else if (key === 'categories') {
+          before = await tx.category.findUniqueOrThrow({ where: { id } });
+          after = await tx.category.update({ where: { id }, data: this.categoryData(v, false) });
+        } else if (key === 'bookings' && v.action !== undefined) {
+          ({ before, after } = await manageBooking(tx, id, v, user.id, reason));
+        } else if (key === 'orders') {
+          onlyFields(v, ['status']);
           const row = await tx.order.findUniqueOrThrow({ where: { id }, include: { items: true } });
           before = row;
           const status = text(v.status, 'Status') as OrderStatus;
@@ -515,6 +623,8 @@ export class AdminService {
             throw new ConflictException('Keep at least one active super admin.');
           after = await tx.adminStaff.update({ where: { userId: id }, data: { role, active } });
         } else if (key === 'bookings') {
+          onlyFields(v, ['status']);
+          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended('gardener-allocation',0))::text`;
           const row = await tx.serviceBooking.findUniqueOrThrow({ where: { id } });
           before = row;
           if (
@@ -550,6 +660,20 @@ export class AdminService {
       },
       { timeout: 20000 },
     );
+  }
+  private categoryData(v: Row, create: boolean): Prisma.CategoryUpdateInput {
+    onlyFields(v, ['name', 'slug', 'active', 'sortOrder']);
+    const data: Prisma.CategoryUpdateInput = {};
+    for (const key of ['name', 'slug'] as const)
+      if (create || v[key] !== undefined) data[key] = text(v[key], key, 150);
+    if (v.active !== undefined) data.active = bool(v.active, 'Active');
+    if (v.sortOrder !== undefined) {
+      const value = num(v.sortOrder, 'Sort order', 0, 10000);
+      if (!Number.isInteger(value))
+        throw new BadRequestException('Sort order must be a whole number.');
+      data.sortOrder = value;
+    }
+    return data;
   }
   private productData(v: Row, create: boolean): Prisma.ProductUncheckedUpdateInput {
     const data: Prisma.ProductUncheckedUpdateInput = {};
@@ -627,11 +751,39 @@ export class AdminService {
     return data;
   }
   async create(user: AuthenticatedUser, key: string, change: AdminChange): Promise<unknown> {
-    await this.access.require(user, key === 'products' ? 'products.create' : `${key}.update`);
+    change.reason = requiredText(change.reason, 'Reason', 500);
+    if (change.reason.length < 3)
+      throw new BadRequestException('Reason must contain at least three characters.');
+    await this.access.require(
+      user,
+      key === 'admin-users'
+        ? 'admin.manage'
+        : key === 'categories'
+          ? 'products.update'
+          : key === 'products'
+            ? 'products.create'
+            : `${key}.update`,
+    );
     return this.db.$transaction(async (tx) => {
       const v = change.values;
+      if (key === 'admin-users') {
+        if (!change.confirmed) throw new BadRequestException('Confirm granting staff access.');
+        const staff = await addStaff(tx, v);
+        await this.audit(tx, user, key, staff.userId, change, null, staff, 'create');
+        return staff;
+      }
+      if (key === 'rewards') {
+        const result = await adjustRewards(tx, v);
+        if (!result.replay)
+          await this.audit(tx, user, key, result.row.id, change, null, result.row, 'create');
+        return result.row;
+      }
       let row: { id: string };
-      if (key === 'products')
+      if (key === 'categories')
+        row = await tx.category.create({
+          data: this.categoryData(v, true) as Prisma.CategoryCreateInput,
+        });
+      else if (key === 'products')
         row = await tx.product.create({
           data: this.productData(v, true) as Prisma.ProductUncheckedCreateInput,
         });
@@ -643,7 +795,8 @@ export class AdminService {
         row = await tx.banner.create({
           data: this.bannerData(v, true) as Prisma.BannerCreateInput,
         });
-      else if (key === 'notifications')
+      else if (key === 'notifications') {
+        await customerProfile(tx, uuid(v.userId));
         row = await tx.adminNotificationDraft.create({
           data: {
             title: text(v.title, 'Title', 150),
@@ -652,8 +805,8 @@ export class AdminService {
             createdBy: user.id,
           },
         });
-      else throw new BadRequestException('Creation is unavailable for this section.');
-      await this.audit(tx, user, key, row.id, change, null, row);
+      } else throw new BadRequestException('Creation is unavailable for this section.');
+      await this.audit(tx, user, key, row.id, change, null, row, 'create');
       return row;
     });
   }
@@ -663,6 +816,48 @@ export class AdminService {
     q: AdminQuery,
   ): Promise<{ csv: string; total: number; page: number; limit: number }> {
     await this.access.require(user, 'reports.export');
+    if (q.scope === 'all') {
+      return this.db.$transaction(
+        async (tx) => {
+          const reader = new AdminService(
+            tx as PrismaService,
+            this.access,
+            this.states,
+            this.gardeners,
+            this.support,
+          );
+          const read = (page: number): ReturnType<AdminService['list']> =>
+            key === 'customers'
+              ? reader.customers(user, { ...q, page, limit: 100 })
+              : reader.list(user, key, { ...q, page, limit: 100 });
+          const first = await read(1);
+          if (first.total > 10000)
+            throw new BadRequestException(
+              'Narrow the filters to 10,000 records or fewer before exporting.',
+            );
+          const lines = [first.columns.map(csvCell).join(',')];
+          const append = (rows: Row[]): number =>
+            lines.push(
+              ...rows.map((row) => first.columns.map((col) => csvCell(row[col])).join(',')),
+            );
+          append(first.rows);
+          for (let page = 2; page <= Math.ceil(first.total / 100); page++)
+            append((await read(page)).rows);
+          await tx.adminAuditLog.create({
+            data: {
+              actorId: user.id,
+              action: 'export',
+              entity: key,
+              entityId: 'all',
+              reason: 'Exported all filtered records',
+              after: json({ count: first.total, query: q }),
+            },
+          });
+          return { csv: lines.join('\r\n'), total: first.total, page: 1, limit: first.total };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 60000 },
+      );
+    }
     const result =
       key === 'customers' ? await this.customers(user, q) : await this.list(user, key, q);
     await this.db.adminAuditLog.create({

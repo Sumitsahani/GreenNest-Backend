@@ -3,6 +3,7 @@ import {
   IsBoolean,
   IsDateString,
   IsInt,
+  IsIn,
   IsObject,
   IsOptional,
   IsString,
@@ -18,6 +19,7 @@ export class AdminQuery {
   @IsOptional() @IsString() @MaxLength(50) status?: string;
   @IsOptional() @IsDateString() from?: string;
   @IsOptional() @IsDateString() to?: string;
+  @IsOptional() @IsIn(['page', 'all']) scope?: 'page' | 'all';
 }
 export class AdminChange {
   @IsString() @MinLength(3) @MaxLength(500) reason!: string;

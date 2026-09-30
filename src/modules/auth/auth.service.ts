@@ -267,6 +267,12 @@ export class AuthService {
   }
 
   private mapUser(user: SupabaseUser): AuthUserResponse {
+    if (user.app_metadata?.suspended === true)
+      throw new BusinessException(
+        ErrorCode.UNAUTHORIZED,
+        'Your account is suspended. Contact support.',
+        HttpStatus.FORBIDDEN,
+      );
     const metadata = user.user_metadata ?? {};
     return {
       id: user.id,

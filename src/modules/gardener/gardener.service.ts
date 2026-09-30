@@ -1,3 +1,5 @@
+import { type PageResult, paginate, dateRange } from '../../common/pagination';
+import { BookingListQuery } from '../../common/dto/list-query.dto';
 import { Optional } from '@nestjs/common';
 import { AdminAccessService } from '../admin/admin-access.service';
 import { HttpStatus, Injectable } from '@nestjs/common';
@@ -83,9 +85,7 @@ export class GardenerService {
     @Optional() private readonly adminAccess?: AdminAccessService,
   ) {}
 
-  async access(
-    user: AuthenticatedUser,
-  ): Promise<{
+  async access(user: AuthenticatedUser): Promise<{
     userId: string;
     role: 'ADMIN' | 'GARDENER' | 'CUSTOMER';
     profile: Gardener | null;
@@ -134,6 +134,63 @@ export class GardenerService {
       fail('Complete your gardener profile before accepting new work.', HttpStatus.FORBIDDEN);
     return this.db.gardener.update({ where: { id: profile.id }, data: dto });
   }
+  async jobsPage(
+    userId: string,
+    query: BookingListQuery,
+    history = false,
+  ): Promise<PageResult<JobSummary>> {
+    const gardener = await this.profile(userId, true);
+    const where: Prisma.ServiceBookingWhereInput = {
+      gardenerId: gardener.id,
+      scheduledAt: dateRange(query),
+      AND: [
+        { status: history ? { in: closedJobs } : { notIn: closedJobs } },
+        ...(query.status
+          ? [
+              {
+                status:
+                  query.status === 'ACTIVE'
+                    ? { notIn: closedJobs }
+                    : query.status === 'HISTORY'
+                      ? { in: closedJobs }
+                      : query.status,
+              },
+            ]
+          : []),
+      ],
+      ...(query.search
+        ? {
+            OR: [
+              { bookingNumber: { contains: query.search, mode: 'insensitive' as const } },
+              { customerName: { contains: query.search, mode: 'insensitive' as const } },
+              { service: { title: { contains: query.search, mode: 'insensitive' as const } } },
+            ],
+          }
+        : {}),
+    };
+    return paginate(
+      query,
+      (skip, take) =>
+        this.db.serviceBooking.findMany({
+          where,
+          skip,
+          take,
+          select: {
+            id: true,
+            bookingNumber: true,
+            scheduledAt: true,
+            status: true,
+            customerName: true,
+            notes: true,
+            price: true,
+            plantIds: true,
+            service: { select: { title: true, durationMinutes: true } },
+          },
+          orderBy: [{ [query.sortBy]: query.sort === 'oldest' ? 'asc' : 'desc' }, { id: 'asc' }],
+        }),
+      () => this.db.serviceBooking.count({ where }),
+    );
+  }
   async jobs(userId: string, page = 1, history = false): Promise<JobSummary[]> {
     const gardener = await this.profile(userId, true);
     return this.db.serviceBooking.findMany({
@@ -157,9 +214,7 @@ export class GardenerService {
       take: 25,
     });
   }
-  async dashboard(
-    userId: string,
-  ): Promise<{
+  async dashboard(userId: string): Promise<{
     today: number;
     pending: number;
     accepted: number;

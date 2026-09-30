@@ -1,5 +1,7 @@
+import { type PageResult, paginate, dateRange, listDirection } from '../../common/pagination';
+import { ListQueryDto } from '../../common/dto/list-query.dto';
 import { HttpStatus, Injectable } from '@nestjs/common';
-import type { RewardRedemption, RewardTransaction } from '@prisma/client';
+import type { Prisma, RewardRedemption, RewardTransaction } from '@prisma/client';
 import { ErrorCode } from '../../common/constants/error-code';
 import { BusinessException } from '../../common/exceptions/business.exception';
 import { PrismaService } from '../../database/prisma.service';
@@ -38,6 +40,42 @@ export type RewardRedemptionResult = RewardRedemption & { balance: number };
 
 @Injectable()
 export class RewardsService {
+  transactions(userId: string, query: ListQueryDto): Promise<PageResult<RewardTransaction>> {
+    const where: Prisma.RewardTransactionWhereInput = {
+      userId,
+      createdAt: dateRange(query),
+      ...(query.search ? { title: { contains: query.search, mode: 'insensitive' } } : {}),
+    };
+    return paginate(
+      query,
+      (skip, take) =>
+        this.prisma.rewardTransaction.findMany({
+          where,
+          skip,
+          take,
+          orderBy: [{ createdAt: listDirection(query) }, { id: 'asc' }],
+        }),
+      () => this.prisma.rewardTransaction.count({ where }),
+    );
+  }
+  redemptions(userId: string, query: ListQueryDto): Promise<PageResult<RewardRedemption>> {
+    const where: Prisma.RewardRedemptionWhereInput = {
+      userId,
+      createdAt: dateRange(query),
+      ...(query.search ? { title: { contains: query.search, mode: 'insensitive' } } : {}),
+    };
+    return paginate(
+      query,
+      (skip, take) =>
+        this.prisma.rewardRedemption.findMany({
+          where,
+          skip,
+          take,
+          orderBy: [{ createdAt: listDirection(query) }, { id: 'asc' }],
+        }),
+      () => this.prisma.rewardRedemption.count({ where }),
+    );
+  }
   constructor(private readonly prisma: PrismaService) {}
 
   async summary(userId: string): Promise<RewardsSummary> {

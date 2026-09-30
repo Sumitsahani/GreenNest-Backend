@@ -1,3 +1,13 @@
+import { mentionsPlantProblem } from './consultation';
+import {
+  consultationKey,
+  consultationScope,
+  storedConsultation,
+  consultationMemoryData,
+} from './consultation-memory';
+import { paginate, dateRange, listDirection, type PageResult } from '../../common/pagination';
+import { ListQueryDto } from '../../common/dto/list-query.dto';
+import type { Prisma } from '@prisma/client';
 import { calculateWatering, wateringEvidence } from '../garden/watering-engine';
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { AiMessageRole, type AiConversation, type AiMessage } from '@prisma/client';
@@ -14,6 +24,48 @@ import { AiCareActionService, type AiCareUpdate } from './ai-care-action.service
 
 @Injectable()
 export class AiService {
+  conversationsPage(userId: string, query: ListQueryDto): Promise<PageResult<AiConversation>> {
+    const where: Prisma.AiConversationWhereInput = {
+      userId,
+      createdAt: dateRange(query),
+      ...(query.search ? { title: { contains: query.search, mode: 'insensitive' } } : {}),
+    };
+    return paginate(
+      query,
+      (skip, take) =>
+        this.prisma.aiConversation.findMany({
+          where,
+          skip,
+          take,
+          orderBy: [{ updatedAt: listDirection(query) }, { id: 'asc' }],
+        }),
+      () => this.prisma.aiConversation.count({ where }),
+    );
+  }
+  async messagesPage(
+    userId: string,
+    conversationId: string,
+    query: ListQueryDto,
+  ): Promise<PageResult<AiMessage>> {
+    await this.assertConversation(userId, conversationId);
+    const where: Prisma.AiMessageWhereInput = {
+      conversationId,
+      createdAt: dateRange(query),
+      ...(query.search ? { content: { contains: query.search, mode: 'insensitive' } } : {}),
+    };
+    return paginate(
+      query,
+      (skip, take) =>
+        this.prisma.aiMessage.findMany({
+          where,
+          skip,
+          take,
+          orderBy: [{ sequence: listDirection(query) }, { id: 'asc' }],
+        }),
+      () => this.prisma.aiMessage.count({ where }),
+    );
+  }
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly extractor: MemoryExtractorService,
@@ -50,7 +102,11 @@ export class AiService {
       take: 500,
     });
     const now = new Date();
-    const due = plants.filter((plant) => ['DUE', 'OVERDUE', 'INSPECT_FIRST', 'UNCERTAIN'].includes(calculateWatering(plant, now).wateringStatus));
+    const due = plants.filter((plant) =>
+      ['DUE', 'OVERDUE', 'INSPECT_FIRST', 'UNCERTAIN'].includes(
+        calculateWatering(plant, now).wateringStatus,
+      ),
+    );
     const hottest = (weather?.temperature ?? 0) >= 32;
     const message = !plants.length
       ? 'Add your first plant to receive a personalized daily care briefing.'
@@ -85,6 +141,24 @@ export class AiService {
     superseded?: boolean;
   }> {
     await this.assertConversation(userId, conversationId);
+    const lastPlant =
+      dto.plantId === undefined
+        ? await this.prisma.aiMessage.findFirst({
+            where: { conversationId, role: AiMessageRole.USER },
+            orderBy: { sequence: 'desc' },
+            select: { plantId: true },
+          })
+        : null;
+    const plantId = dto.plantId ?? lastPlant?.plantId ?? undefined;
+    const consultationRecord = await this.prisma.aiUserMemory.findFirst({
+      where: {
+        userId,
+        scopeKey: consultationScope(conversationId, plantId),
+        memoryKey: consultationKey,
+        status: 'ACTIVE',
+      },
+    });
+    const priorConsultation = storedConsultation(consultationRecord?.evidence);
     const originals = (dto.messages ?? [dto.message]).map((message) => message.trim());
     const content = originals.join('\n');
     if (originals.some((message) => !message) || content.length > 4000)
@@ -97,7 +171,7 @@ export class AiService {
     // The first build validates optional plant ownership before any message is
     // persisted. Rebuild after extraction so an explicit correction in this
     // message can immediately influence the answer.
-    const initialContext = await this.context.build(userId, content, dto.plantId);
+    const initialContext = await this.context.build(userId, content, plantId);
     const persisted = await this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`chat:${conversationId}`}, 0))::text`;
       const old = await tx.aiMessage.findMany({
@@ -108,7 +182,7 @@ export class AiService {
       if (
         users.length &&
         (users.map((message) => message.content).join('\n') !== content ||
-          users[0]?.plantId !== (dto.plantId ?? null))
+          users[0]?.plantId !== (plantId ?? null))
       )
         throw new BusinessException(
           ErrorCode.VALIDATION_ERROR,
@@ -142,7 +216,7 @@ export class AiService {
                 batchIndex,
                 role: AiMessageRole.USER,
                 content: message,
-                plantId: dto.plantId,
+                plantId: plantId,
                 intent: initialContext.intent,
               },
             }),
@@ -177,37 +251,44 @@ export class AiService {
       }
       const careAction = persisted.replay
         ? null
-        : await this.careActions.apply(userId, dto.plantId, content, userMessage.id);
-      const extracted = persisted.replay ? [] : this.extractor.extract(content, dto.plantId);
+        : await this.careActions.apply(userId, plantId, content, userMessage.id);
+      const extracted = persisted.replay ? [] : this.extractor.extract(content, plantId);
       if (extracted.length) await this.memories.apply(userId, extracted);
       if (!persisted.replay)
-        await this.intelligence.learnFromConversation(userId, dto.plantId, content);
-      const context = await this.context.build(userId, content, dto.plantId);
-      const response =
-        careAction?.reply ??
-        (await this.responses.generate(
-          content,
-          context,
-          dto.imageUrl,
-          recentHistory.reverse().map((turn) => ({
-            role: turn.role as 'USER' | 'ASSISTANT',
-            content: turn.content,
-          })),
-          dto.language ?? 'AUTO',
-        ));
+        await this.intelligence.learnFromConversation(userId, plantId, content);
+      const context = await this.context.build(userId, content, plantId);
+      const needsConsultation = !!priorConsultation || mentionsPlantProblem(content);
+      if (careAction?.reply)
+        context.promptContext += `\nCONFIRMED APPLICATION RESULT: ${careAction.reply}`;
+      const generated =
+        careAction?.reply && !needsConsultation
+          ? { reply: careAction.reply, consultation: null }
+          : await this.responses.consult(
+              content,
+              context,
+              dto.imageUrl,
+              recentHistory
+                .reverse()
+                .map((turn) => ({
+                  role: turn.role as 'USER' | 'ASSISTANT',
+                  content: turn.content,
+                })),
+              dto.language ?? 'AUTO',
+              priorConsultation,
+            );
       const assistantMessage = await this.prisma.$transaction(async (tx) => {
         const claimed = await tx.aiConversation.updateMany({
           where: { id: conversationId, userId, activeRequestId: requestId },
           data: { activeRequestId: null, updatedAt: new Date() },
         });
         if (!claimed.count) return null;
-        return tx.aiMessage.create({
+        const saved = await tx.aiMessage.create({
           data: {
             conversationId,
             requestId,
             role: AiMessageRole.ASSISTANT,
-            content: response,
-            plantId: dto.plantId,
+            content: generated.reply,
+            plantId: plantId,
             intent: context.intent,
             sourcesUsed: [
               ...context.sourcesUsed,
@@ -215,13 +296,27 @@ export class AiService {
             ],
           },
         });
+        if (generated.consultation)
+          await tx.aiUserMemory.upsert(
+            consultationMemoryData({
+              userId,
+              conversationId,
+              plantId,
+              state: generated.consultation,
+              userMessageId: userMessage.id,
+              assistantMessageId: saved.id,
+              imageUrl: dto.imageUrl,
+              previousEvidence: consultationRecord?.evidence,
+            }),
+          );
+        return saved;
       });
       return {
         userMessage,
         userMessages: persisted.users,
         assistantMessage,
         superseded: assistantMessage === null,
-        memoriesUpdated: extracted.length,
+        memoriesUpdated: extracted.length + (assistantMessage && generated.consultation ? 1 : 0),
         careUpdate: careAction?.update,
       };
     } catch (error) {

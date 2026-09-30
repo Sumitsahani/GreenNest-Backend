@@ -1,9 +1,11 @@
+import { ApiPaginatedResponse } from '../../common/paginated-response';
+import { SupportListQuery } from '../../common/dto/list-query.dto';
 import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import type { SupportMessage } from '@prisma/client';
 import { ApiHeader, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { SendSupportMessageDto, SupportAdminQueryDto } from './dto/support.dto';
+import { SendSupportMessageDto } from './dto/support.dto';
 import { SupportAgentGuard } from './support-agent.guard';
-import { SupportService, type SupportConversationResponse } from './support.service';
+import { SupportService } from './support.service';
 
 @ApiTags('Support agent')
 @ApiHeader({ name: 'X-Support-Key', required: true })
@@ -14,16 +16,14 @@ export class SupportAdminController {
 
   @Get()
   @ApiOperation({ summary: 'List conversations for the support team' })
-  list(@Query() query: SupportAdminQueryDto): Promise<SupportConversationResponse[]> {
-    return this.support.adminList(query.status);
+  @ApiPaginatedResponse()
+  list(@Query() query: SupportListQuery): ReturnType<SupportService['adminListPage']> {
+    return this.support.adminListPage(query);
   }
 
   @Post(':id/messages')
   @ApiOperation({ summary: 'Reply to a customer and create an in-app notification' })
-  reply(
-    @Param('id') id: string,
-    @Body() dto: SendSupportMessageDto,
-  ): Promise<SupportMessage> {
+  reply(@Param('id') id: string, @Body() dto: SendSupportMessageDto): Promise<SupportMessage> {
     return this.support.reply(id, dto);
   }
 }

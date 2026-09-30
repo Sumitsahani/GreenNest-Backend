@@ -107,11 +107,10 @@ export class WeatherCareService {
       const candidates = [...new Set([label, label.split(',')[0]!.trim()])];
       for (const candidate of candidates) {
         const params = new URLSearchParams({ name: candidate, count: '1', language: 'en' });
-        const response = await this.fetchWithTimeout(
+        const response = await this.fetchJsonWithTimeout<OpenMeteoGeocoding>(
           `https://geocoding-api.open-meteo.com/v1/search?${params.toString()}`,
         );
-        if (!response.ok) return null;
-        const result = ((await response.json()) as OpenMeteoGeocoding).results?.[0];
+        const result = response.results?.[0];
         if (!result) continue;
         return {
           label: [result.name, result.admin1, result.country]
@@ -196,11 +195,9 @@ export class WeatherCareService {
       forecast_days: '7',
       timezone: 'auto',
     });
-    const response = await this.fetchWithTimeout(
+    const data = await this.fetchJsonWithTimeout<OpenMeteoForecast>(
       `https://api.open-meteo.com/v1/forecast?${params.toString()}`,
     );
-    if (!response.ok) throw new Error('Weather provider unavailable');
-    const data = (await response.json()) as OpenMeteoForecast;
     const firstThree = (values: number[]): number[] => values.slice(0, 3);
     const value: WeatherSnapshot = {
       temperature: data.current.temperature_2m,
@@ -217,21 +214,31 @@ export class WeatherCareService {
     return value;
   }
 
-  private async fetchWithTimeout(url: string): Promise<Response> {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 8_000);
-      try {
-        const response = await fetch(url, { signal: controller.signal });
-        if (response.status >= 500 && attempt === 0) continue;
-        return response;
-      } catch (error) {
-        if (attempt === 1) throw error;
-      } finally {
-        clearTimeout(timeout);
+  private async fetchJsonWithTimeout<T>(url: string): Promise<T> {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const request = async (): Promise<T> => {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const response = await fetch(url, { signal: controller.signal });
+          if (!response.ok) throw new Error('Weather provider unavailable');
+          return await response.json() as T;
+        } catch (error) {
+          if (attempt === 1 || controller.signal.aborted) throw error;
+        }
       }
-    }
-    throw new Error('Weather provider unavailable');
+      throw new Error('Weather provider unavailable');
+    };
+    // Weather is optional evidence. Bound the whole operation, including body
+    // decoding and retry, so garden screens can fall back to plant history.
+    try {
+      return await Promise.race([request(), new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error('Weather provider timed out'));
+          controller.abort();
+        }, 3_000);
+      })]);
+    } finally { clearTimeout(timer); }
   }
 
   private describeWeather(code: number): string {
