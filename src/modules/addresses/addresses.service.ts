@@ -1,3 +1,6 @@
+import { paginate, dateRange, listDirection, type PageResult } from '../../common/pagination';
+import { ListQueryDto } from '../../common/dto/list-query.dto';
+import type { Prisma } from '@prisma/client';
 import { HttpStatus, Injectable } from '@nestjs/common';
 import type { Address } from '@prisma/client';
 import { ErrorCode } from '../../common/constants/error-code';
@@ -7,6 +10,33 @@ import type { CreateAddressDto, UpdateAddressDto } from './dto/address.dto';
 
 @Injectable()
 export class AddressesService {
+  listPage(userId: string, query: ListQueryDto): Promise<PageResult<Address>> {
+    const where: Prisma.AddressWhereInput = {
+      userId,
+      createdAt: dateRange(query),
+      ...(query.search
+        ? {
+            OR: [
+              { label: { contains: query.search, mode: 'insensitive' } },
+              { fullAddress: { contains: query.search, mode: 'insensitive' } },
+              { postalCode: { contains: query.search } },
+            ],
+          }
+        : {}),
+    };
+    return paginate(
+      query,
+      (skip, take) =>
+        this.prisma.address.findMany({
+          where,
+          skip,
+          take,
+          orderBy: [{ isDefault: 'desc' }, { createdAt: listDirection(query) }, { id: 'asc' }],
+        }),
+      () => this.prisma.address.count({ where }),
+    );
+  }
+
   constructor(private readonly prisma: PrismaService) {}
   list(userId: string): Promise<Address[]> {
     return this.prisma.address.findMany({

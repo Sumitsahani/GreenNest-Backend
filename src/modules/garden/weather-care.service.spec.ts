@@ -84,6 +84,18 @@ describe('WeatherCareService', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('falls back to plant history when weather body never finishes', async () => {
+    jest.useFakeTimers();
+    try {
+      jest.spyOn(global, 'fetch').mockResolvedValue({ok:true,json:()=>new Promise(()=>undefined)} as Response);
+      const pending = new WeatherCareService().createReminder(plant());
+      await jest.advanceTimersByTimeAsync(3_000);
+      const result = await pending;
+      expect(result.weather).toBeNull();
+      expect(result.wateringState).toBeDefined();
+    } finally { jest.useRealTimers(); }
+  });
+
   it('resolves the saved city for older plants without coordinates', async () => {
     jest
       .spyOn(global, 'fetch')

@@ -1,4 +1,6 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { ApiPaginatedResponse } from '../../common/paginated-response';
+import { ListQueryDto, SupportListQuery } from '../../common/dto/list-query.dto';
+import { Query, Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import type { SupportConversation, SupportMessage } from '@prisma/client';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, type AuthenticatedUser } from '../../common/auth/authenticated-user';
@@ -19,8 +21,12 @@ export class SupportController {
 
   @Get()
   @ApiOperation({ summary: 'List the current user support conversations' })
-  list(@CurrentUser() user: AuthenticatedUser): Promise<SupportConversation[]> {
-    return this.support.list(user.id);
+  @ApiPaginatedResponse()
+  list(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: SupportListQuery,
+  ): ReturnType<SupportService['listPage']> {
+    return this.support.listPage(user.id, query);
   }
 
   @Post()
@@ -34,11 +40,13 @@ export class SupportController {
 
   @Get(':id/messages')
   @ApiOperation({ summary: 'Read messages and mark support replies as read' })
+  @ApiPaginatedResponse()
   messages(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
-  ): Promise<SupportMessage[]> {
-    return this.support.messages(user.id, id);
+    @Query() query: ListQueryDto,
+  ): ReturnType<SupportService['messagesPage']> {
+    return this.support.messagesPage(user.id, id, query);
   }
 
   @Post(':id/messages')

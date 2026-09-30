@@ -1,6 +1,7 @@
 import { Injectable, Logger, type OnApplicationShutdown, type OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaClient } from '@prisma/client';
+import { runtimeDatabaseUrl } from './connection-options';
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnApplicationShutdown {
@@ -9,6 +10,10 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnAppli
 
   constructor(private readonly configService: ConfigService) {
     super({
+      datasourceUrl: runtimeDatabaseUrl(
+        configService.get<string>('DATABASE_URL') ?? process.env.DATABASE_URL,
+        configService.get<number>('DATABASE_CONNECTION_LIMIT', 4),
+      ),
       log: configService.get<string>('nodeEnv') === 'development' ? ['warn', 'error'] : ['error'],
     });
   }

@@ -19,6 +19,7 @@ const grants: Record<AdminRole, string[]> = {
     'inventory.read',
     'inventory.update',
     'customers.read',
+    'customers.update',
     'gardeners.read',
     'bookings.read',
     'bookings.update',
@@ -47,6 +48,7 @@ const grants: Record<AdminRole, string[]> = {
     'reports.read',
     'reports.export',
     'rewards.read',
+    'rewards.update',
   ],
   GARDENER_ADMIN: [
     'dashboard.read',

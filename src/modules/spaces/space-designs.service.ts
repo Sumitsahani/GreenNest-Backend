@@ -1,3 +1,5 @@
+import { type PageResult, paginate, dateRange, listDirection } from '../../common/pagination';
+import { DesignListQuery } from '../../common/dto/list-query.dto';
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { Prisma, type SpaceDesign } from '@prisma/client';
 import { createHash } from 'node:crypto';
@@ -9,6 +11,42 @@ import type { CreateDesignDto } from './dto/designs.dto';
 
 @Injectable()
 export class SpaceDesignsService {
+  async listPage(
+    userId: string,
+    spaceId: string,
+    query: DesignListQuery,
+  ): Promise<
+    PageResult<
+      Pick<SpaceDesign, 'id' | 'spaceId' | 'title' | 'style' | 'carePreference' | 'createdAt'>
+    >
+  > {
+    await this.ownedSpace(userId, spaceId);
+    const where: Prisma.SpaceDesignWhereInput = {
+      spaceId,
+      createdAt: dateRange(query),
+      style: query.style,
+      ...(query.search ? { title: { contains: query.search, mode: 'insensitive' } } : {}),
+    };
+    return paginate(
+      query,
+      (skip, take) =>
+        this.prisma.spaceDesign.findMany({
+          where,
+          skip,
+          take,
+          select: {
+            id: true,
+            spaceId: true,
+            title: true,
+            style: true,
+            carePreference: true,
+            createdAt: true,
+          },
+          orderBy: [{ createdAt: listDirection(query) }, { id: 'asc' }],
+        }),
+      () => this.prisma.spaceDesign.count({ where }),
+    );
+  }
   constructor(private readonly prisma: PrismaService) {}
 
   private async ownedSpace(

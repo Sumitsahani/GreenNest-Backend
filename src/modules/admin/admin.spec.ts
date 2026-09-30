@@ -137,3 +137,62 @@ describe('admin operations', () => {
     expect(update).not.toHaveBeenCalled();
   });
 });
+
+describe('filtered exports', () => {
+  const rows = Array.from({ length: 101 }, (_, i) => ({
+    id: String(i),
+    name: `Category ${i}`,
+    slug: `category-${i}`,
+    active: true,
+  }));
+  const setup = (
+    total = rows.length,
+  ): { service: AdminService; audit: jest.Mock; transaction: jest.Mock; findMany: jest.Mock } => {
+    const audit = jest.fn();
+    const findMany = jest.fn(({ skip, take }: { skip: number; take: number }) =>
+      Promise.resolve(rows.slice(skip, skip + take)),
+    );
+    const tx = {
+      category: { findMany, count: jest.fn().mockResolvedValue(total) },
+      adminAuditLog: { create: audit },
+    };
+    const transaction = jest.fn((fn: (value: object) => unknown) => fn(tx));
+    return {
+      service: new AdminService(
+        { $transaction: transaction } as never,
+        { require: jest.fn().mockResolvedValue({ role: 'SUPER_ADMIN' }) } as never,
+        {} as never,
+        {} as never,
+        {} as never,
+      ),
+      audit,
+      transaction,
+      findMany,
+    };
+  };
+  it('exports every filtered page from one repeatable-read snapshot', async () => {
+    const { service, audit, transaction, findMany } = setup();
+    const result = await service.export(admin, 'categories', {
+      page: 4,
+      limit: 25,
+      scope: 'all',
+      search: 'Category',
+    });
+    expect(result.total).toBe(101);
+    expect(result.csv.split('\r\n')).toHaveLength(102);
+    expect(result.csv).toContain('Category 100');
+    expect(findMany).toHaveBeenCalledTimes(2);
+    expect(transaction).toHaveBeenCalledWith(expect.any(Function), {
+      isolationLevel: 'RepeatableRead',
+      timeout: 60000,
+    });
+    expect(audit).toHaveBeenCalledTimes(1);
+  });
+  it('rejects oversized exports without recording success', async () => {
+    const { service, audit } = setup(10001);
+    await expect(
+      service.export(admin, 'categories', { page: 1, limit: 25, scope: 'all' }),
+    ).rejects.toThrow('10,000');
+    expect(audit).not.toHaveBeenCalled();
+  });
+});

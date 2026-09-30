@@ -30,7 +30,7 @@ export class AiContextService {
 
   async build(userId: string, question: string, plantId?: string): Promise<AiContext> {
     const intent = this.questions.classify(question);
-    const [garden, memories, plantState, profile] = await Promise.all([
+    const [garden, memories, plantState, profile, consultations] = await Promise.all([
       this.prisma.gardenPlant.findMany({
         where: {
           userId,
@@ -43,6 +43,14 @@ export class AiContextService {
       this.memory.relevant(userId, question, 8, plantId),
       plantId ? this.states.getPlantState(plantId, userId) : Promise.resolve(null),
       this.profiles.build(userId),
+      plantId
+        ? this.prisma.aiUserMemory.findMany({
+            where: { userId, plantId, memoryKey: 'plant_doctor_consultation', status: 'ACTIVE' },
+            orderBy: { updatedAt: 'desc' },
+            take: 2,
+            select: { evidence: true, updatedAt: true },
+          })
+        : Promise.resolve([]),
     ]);
     const historicalPlants = plantState
       ? profile.historicalPlants
@@ -153,6 +161,7 @@ export class AiContextService {
       ...(plantState?.healthHistory.length ? ['plant_health_history'] : []),
       ...(plantState?.treatments.length ? ['plant_treatments'] : []),
       ...(plantState?.recentPhotos.length ? ['photo_analysis_records'] : []),
+      ...(consultations.length ? ['previous_consultations'] : []),
       ...(memories.length ? ['relevant_memory'] : []),
       ...(historicalPlants.length ? ['same_species_history'] : []),
       ...(patternLines.length ? ['user_patterns'] : []),
@@ -172,6 +181,8 @@ export class AiContextService {
         currentPlantLines.join('\n'),
         'AUTHORITATIVE CURRENT GARDEN DATA:',
         gardenLines.length ? gardenLines.join('\n') : 'No structured garden records.',
+        'PREVIOUS CONSULTATIONS (model summaries, not confirmed diagnoses or completed treatments; re-check current symptoms):',
+        JSON.stringify(consultations),
         'RELEVANT STRUCTURED MEMORY:',
         memoryLines.length ? memoryLines.join('\n') : 'No relevant saved memory.',
         'RELEVANT SAME-SPECIES HISTORY (supporting evidence, never overrides current state):',

@@ -21,6 +21,13 @@ export class AdminController {
   @Get('me') me(@CurrentUser() u: AuthenticatedUser): ReturnType<AdminService['me']> {
     return this.admin.me(u);
   }
+  @Get('lookups/:resource') lookup(
+    @CurrentUser() u: AuthenticatedUser,
+    @Param('resource') key: string,
+    @Query() q: AdminQuery,
+  ): ReturnType<AdminService['lookup']> {
+    return this.admin.lookup(u, key, q);
+  }
   @Get('dashboard') dashboard(
     @CurrentUser() u: AuthenticatedUser,
     @Query() q: AdminQuery,

@@ -1,4 +1,6 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { ApiPaginatedResponse } from '../../common/paginated-response';
+import { OrderListQuery } from '../../common/dto/list-query.dto';
+import { Query, Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, type AuthenticatedUser } from '../../common/auth/authenticated-user';
 import { SupabaseAuthGuard } from '../../common/auth/supabase-auth.guard';
@@ -17,8 +19,13 @@ export class OrdersController {
   ): Promise<OrderResponse> {
     return this.orders.create(user.id, dto);
   }
-  @Get() list(@CurrentUser() user: AuthenticatedUser): Promise<OrderResponse[]> {
-    return this.orders.list(user.id);
+  @ApiPaginatedResponse()
+  @Get()
+  list(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: OrderListQuery,
+  ): ReturnType<OrdersService['listPage']> {
+    return this.orders.listPage(user.id, query);
   }
   @Get(':id') detail(
     @CurrentUser() user: AuthenticatedUser,

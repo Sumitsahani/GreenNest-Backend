@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { BadRequestException, HttpStatus, Injectable } from '@nestjs/common';
 import { Prisma, type Banner } from '@prisma/client';
 import { ErrorCode } from '../../common/constants/error-code';
 import { BusinessException } from '../../common/exceptions/business.exception';
@@ -36,7 +36,14 @@ export interface ProductResponse {
 }
 export interface ProductListResponse {
   items: ProductResponse[];
-  meta: { page: number; limit: number; total: number; totalPages: number };
+  meta: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    hasNextPage: boolean;
+    hasPreviousPage: boolean;
+  };
 }
 
 @Injectable()
@@ -44,7 +51,10 @@ export class CatalogService {
   constructor(private readonly prisma: PrismaService) {}
 
   banners(placement?: string): Promise<Banner[]> {
-    return this.prisma.banner.findMany({ where: { active: true, ...(placement ? { placement: placement.toUpperCase() } : {}) }, orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }] });
+    return this.prisma.banner.findMany({
+      where: { active: true, ...(placement ? { placement: placement.toUpperCase() } : {}) },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
+    });
   }
 
   async categories(): Promise<CategoryResponse[]> {
@@ -56,6 +66,12 @@ export class CatalogService {
   }
 
   async products(query: ProductQueryDto): Promise<ProductListResponse> {
+    if (
+      query.minPrice !== undefined &&
+      query.maxPrice !== undefined &&
+      query.minPrice > query.maxPrice
+    )
+      throw new BadRequestException('minPrice must not exceed maxPrice');
     const where: Prisma.ProductWhereInput = {
       active: true,
       ...(query.search ? { name: { contains: query.search, mode: 'insensitive' } } : {}),
@@ -73,10 +89,10 @@ export class CatalogService {
           : query.sort === ProductSort.RATING
             ? [{ rating: 'desc' }]
             : [{ featured: 'desc' }, { createdAt: 'desc' }];
-    const [items, total] = await this.prisma.$transaction([
+    const [items, total] = await Promise.all([
       this.prisma.product.findMany({
         where,
-        orderBy,
+        orderBy: [...orderBy, { id: 'asc' }],
         skip: (query.page - 1) * query.limit,
         take: query.limit,
         include: { category: { select: { name: true, slug: true } } },
@@ -90,6 +106,8 @@ export class CatalogService {
         limit: query.limit,
         total,
         totalPages: Math.ceil(total / query.limit),
+        hasNextPage: query.page < Math.ceil(total / query.limit),
+        hasPreviousPage: query.page > 1,
       },
     };
   }

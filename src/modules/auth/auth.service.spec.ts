@@ -45,6 +45,25 @@ describe('AuthService email authentication', () => {
       }),
     );
   });
+  it('rejects a suspended account when mapping a new login session', async () => {
+    jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            access_token: 'token',
+            refresh_token: 'refresh',
+            expires_in: 3600,
+            token_type: 'bearer',
+            user: { id: 'user-1', app_metadata: { suspended: true } },
+          }),
+          { status: 200 },
+        ),
+      );
+    await expect(service.loginWithEmail('person@example.test', 'password')).rejects.toThrow(
+      'suspended',
+    );
+  });
 
   it('logs in with email and maps the Supabase session', async () => {
     jest.spyOn(global, 'fetch').mockResolvedValue(

@@ -62,7 +62,10 @@ describe('AiContextService Plant Doctor evidence', () => {
       ],
       learnedSignals: [],
     };
-    const prisma = { gardenPlant: { findMany: jest.fn().mockResolvedValue([]) } };
+    const prisma = {
+      gardenPlant: { findMany: jest.fn().mockResolvedValue([]) },
+      aiUserMemory: { findMany: jest.fn().mockResolvedValue([]) },
+    };
     const memory = { relevant: jest.fn().mockResolvedValue([]) };
     const states = { getPlantState: jest.fn().mockResolvedValue(state) };
     const profiles = {

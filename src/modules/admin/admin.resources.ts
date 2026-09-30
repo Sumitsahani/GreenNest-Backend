@@ -80,6 +80,14 @@ export const resources = {
     columns: ['helpful', 'reason', 'note', 'createdAt'],
     title: 'AI feedback',
   },
+  'ai-memory': {
+    model: 'aiUserMemory',
+    permission: 'ai.read',
+    search: ['memoryKey', 'memoryValue'],
+    status: 'status',
+    columns: ['userId', 'memoryKey', 'memoryValue', 'status', 'updatedAt'],
+    title: 'AI memory',
+  },
   recommendations: {
     model: 'plantRecommendation',
     permission: 'plant-health.read',

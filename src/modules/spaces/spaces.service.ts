@@ -1,5 +1,8 @@
+import { paginate, dateRange, listDirection, type PageResult } from '../../common/pagination';
+import { SpaceListQuery } from '../../common/dto/list-query.dto';
+import type { Prisma } from '@prisma/client';
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { SpaceAnalysisStatus, type Space, type SpaceScene } from '@prisma/client';
+import { SpaceType, SpaceAnalysisStatus, type Space, type SpaceScene } from '@prisma/client';
 import { ErrorCode } from '../../common/constants/error-code';
 import { BusinessException } from '../../common/exceptions/business.exception';
 import { PrismaService } from '../../database/prisma.service';
@@ -10,6 +13,46 @@ export type SpaceWithScene = Space & { scene: SpaceScene | null };
 
 @Injectable()
 export class SpacesService {
+  listPage(userId: string, query: SpaceListQuery): Promise<PageResult<SpaceWithScene>> {
+    const where: Prisma.SpaceWhereInput = {
+      userId,
+      createdAt: dateRange(query),
+      ...(query.search
+        ? {
+            OR: [
+              {
+                declaredType: {
+                  in: Object.values(SpaceType).filter((type) =>
+                    type.replaceAll('_', ' ').toLowerCase().includes(query.search!.toLowerCase()),
+                  ),
+                },
+              },
+              {
+                detectedType: {
+                  in: Object.values(SpaceType).filter((type) =>
+                    type.replaceAll('_', ' ').toLowerCase().includes(query.search!.toLowerCase()),
+                  ),
+                },
+              },
+            ],
+          }
+        : {}),
+      ...(query.status ? { analysisStatus: query.status } : {}),
+    };
+    return paginate(
+      query,
+      (skip, take) =>
+        this.prisma.space.findMany({
+          where,
+          skip,
+          take,
+          include: { scene: true },
+          orderBy: [{ updatedAt: listDirection(query) }, { id: 'asc' }],
+        }),
+      () => this.prisma.space.count({ where }),
+    );
+  }
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly ai: AiResponseService,
